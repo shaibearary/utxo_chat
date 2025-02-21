@@ -1,0 +1,14 @@
+{
+    "rpc": {
+        "host": "",
+        "user": "",
+        "pass": ""
+    },
+    "node": {
+        "listen_addr": ":8333",
+        "private_key": "",
+        "utxo_txid": "",
+        "utxo_vout": 0,
+        "known_peers": ["127.0.0.1:8334"]
+    }
+} 
