@@ -1,7 +1,6 @@
-
 # UTXO Chat
 
-A decentralized chat system that uses Bitcoin UTXOs for spam protection without bloating the blockchain.
+This is a PoC of utxo chat proposed by [Tadge Dryja](https://github.com/adiabat). A decentralized chat system that uses Bitcoin UTXOs for spam protection without bloating the blockchain.
 
 ## Current Implementation
 
