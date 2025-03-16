@@ -1,0 +1,15 @@
+{
+    "DataDir": ".utxochat",
+    "Network": {
+      "ListenAddr": "0.0.0.0:8334"
+    },
+    "Bitcoin": {
+      "RPCURL": "http://localhost:8332",
+      "RPCUser": "bitcoinuser",
+      "RPCPass": "bitcoinpassword"
+    },
+    "Profile": "",
+    "CPUProfile": "",
+    "MemoryProfile": "",
+    "TraceProfile": ""
+  }
