@@ -1,15 +1,35 @@
 {
     "DataDir": ".utxochat",
     "Network": {
-      "ListenAddr": "0.0.0.0:8334"
+      "ListenAddr": "0.0.0.0:8315",
+      "KnownPeers": [],
+      "HandshakeTimeout": 60
     },
     "Bitcoin": {
-      "RPCURL": "http://localhost:8332",
-      "RPCUser": "bitcoinuser",
-      "RPCPass": "bitcoinpassword"
+      "RPCURL": "bitcoin-mainnet.core.chainstack.com",
+      "RPCUser": "compassionate-spence",
+      "RPCPass": "gully-agent-amuck-purple-wrath-afoot",
+      "DisableTLS": true
     },
-    "Profile": "",
-    "CPUProfile": "",
-    "MemoryProfile": "",
-    "TraceProfile": ""
+    "Database": {
+      "Type": "memory",
+      "Path": ".utxochat/utxochat.db"
+    },
+    "Blockchain": {
+      "NotificationsEnabled": true,
+      "MaxReorgDepth": 6,
+      "ScanFullBlocks": true,
+      "PollInterval": 30
+    },
+    "Message": {
+      "MaxPayloadSize": 65434,
+      "MaxMessageSize": 65536
+    },
+    "Debug": {
+      "Profile": "",
+      "CPUProfile": "",
+      "MemoryProfile": "",
+      "TraceProfile": "",
+      "LogLevel": "info"
+    }
   }

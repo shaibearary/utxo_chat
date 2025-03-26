@@ -12,9 +12,10 @@ This is a PoC of utxo chat proposed by [Tadge Dryja](https://github.com/adiabat)
    - Message size limits (10KB per UTXO) (not test!!!!)
 
 2. **Configuration**
-   - JSON-based configuration
+   - Comprehensive JSON-based configuration
    - RPC settings for Bitcoin node
-   - Node configuration (listen address, keys, UTXOs)
+   - Network, database, and blockchain settings
+   - Debug and profiling options
 
 3. **Basic Client/Server**
    - HTTP server for message reception (should we change it to wss or other protocol) 
@@ -43,18 +44,47 @@ This is a PoC of utxo chat proposed by [Tadge Dryja](https://github.com/adiabat)
 
 ### Configuration
 
-1. Copy the default configuration:
+1. Copy the example configuration:
 ```bash
-cp config/default.json config/config.json
+cp config-example.json config.json
 ```
 
-2. Edit `config/config.json` with your Bitcoin RPC settings:
+2. Edit `config.json` with your settings. Here's what each section controls:
+
 ```json
 {
-    "rpc": {
-        "host": "your-bitcoin-rpc-host",
-        "user": "your-rpc-username",
-        "pass": "your-rpc-password"
+    "DataDir": ".utxochat",           // Directory for data storage
+    "Network": {
+        "ListenAddr": "0.0.0.0:8335", // Network listening address
+        "KnownPeers": [],             // List of known peer addresses
+        "HandshakeTimeout": 60        // Peer handshake timeout in seconds
+    },
+    "Bitcoin": {
+        "RPCURL": "http://localhost:8332", // Bitcoin node RPC URL
+        "RPCUser": "your-username",        // RPC username
+        "RPCPass": "your-password",        // RPC password
+        "DisableTLS": true                 // Whether to disable TLS
+    },
+    "Database": {
+        "Type": "memory",                  // Database type (memory/leveldb)
+        "Path": ".utxochat/utxochat.db"   // Database file path
+    },
+    "Blockchain": {
+        "NotificationsEnabled": true,      // Enable block notifications
+        "MaxReorgDepth": 6,               // Maximum reorg depth to handle
+        "ScanFullBlocks": true,           // Whether to scan full blocks
+        "PollInterval": 30                // Block polling interval in seconds
+    },
+    "Message": {
+        "MaxPayloadSize": 65434,          // Maximum message payload size
+        "MaxMessageSize": 65536           // Maximum total message size
+    },
+    "Debug": {
+        "Profile": "",                    // HTTP profiling port
+        "CPUProfile": "",                 // CPU profile output file
+        "MemoryProfile": "",              // Memory profile output file
+        "TraceProfile": "",               // Execution trace output file
+        "LogLevel": "info"               // Logging level
     }
 }
 ```

@@ -1,4 +1,4 @@
-// Copyright (c) 2023 UTXOchat developers
+// Copyright (c) 2025 UTXOchat developers
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
@@ -22,6 +22,11 @@ import (
 	"runtime/trace"
 	"syscall"
 
+	"github.com/shaibearary/utxo_chat/bitcoin"
+	"github.com/shaibearary/utxo_chat/blockchain"
+	"github.com/shaibearary/utxo_chat/database"
+	"github.com/shaibearary/utxo_chat/message"
+	"github.com/shaibearary/utxo_chat/network"
 	"github.com/shaibearary/utxo_chat/utils"
 )
 
@@ -59,9 +64,9 @@ func utxoChatMain() error {
 	defer log.Println("Shutdown complete")
 
 	// Enable http profiling server if requested.
-	if cfg.Profile != "" {
+	if cfg.Debug.Profile != "" {
 		go func() {
-			listenAddr := net.JoinHostPort("", cfg.Profile)
+			listenAddr := net.JoinHostPort("", cfg.Debug.Profile)
 			log.Printf("Profile server listening on %s", listenAddr)
 			profileRedirect := http.RedirectHandler("/debug/pprof",
 				http.StatusSeeOther)
@@ -71,8 +76,8 @@ func utxoChatMain() error {
 	}
 
 	// Write cpu profile if requested.
-	if cfg.CPUProfile != "" {
-		f, err := os.Create(cfg.CPUProfile)
+	if cfg.Debug.CPUProfile != "" {
+		f, err := os.Create(cfg.Debug.CPUProfile)
 		if err != nil {
 			log.Printf("Unable to create cpu profile: %v", err)
 			return err
@@ -83,8 +88,8 @@ func utxoChatMain() error {
 	}
 
 	// Write mem profile if requested.
-	if cfg.MemoryProfile != "" {
-		f, err := os.Create(cfg.MemoryProfile)
+	if cfg.Debug.MemoryProfile != "" {
+		f, err := os.Create(cfg.Debug.MemoryProfile)
 		if err != nil {
 			log.Printf("Unable to create memory profile: %v", err)
 			return err
@@ -95,13 +100,12 @@ func utxoChatMain() error {
 	}
 
 	// Write execution trace if requested.
-	if cfg.TraceProfile != "" {
-		f, err := os.Create(cfg.TraceProfile)
+	if cfg.Debug.TraceProfile != "" {
+		f, err := os.Create(cfg.Debug.TraceProfile)
 		if err != nil {
 			log.Printf("Unable to create execution trace: %v", err)
 			return err
 		}
-		trace.Start(f)
 		defer f.Close()
 		defer trace.Stop()
 	}
@@ -135,7 +139,7 @@ func utxoChatMain() error {
 	}
 
 	// Check Bitcoin connection.
-	info, err := bitcoinClient.getBlockchainInfo(ctx)
+	info, err := bitcoinClient.GetBlockchainInfo(ctx)
 	if err != nil {
 		log.Printf("Failed to connect to Bitcoin node: %v", err)
 		return err
@@ -143,7 +147,10 @@ func utxoChatMain() error {
 	log.Printf("Connected to Bitcoin node, chain: %s, blocks: %d", info.Chain, info.Blocks)
 
 	// Initialize database.
-	db, err := newDB(filepath.Join(cfg.DataDir, dbNamePrefix+".db"))
+	db, err := database.New(database.Config{
+		Type: database.Type(cfg.Database.Type),
+		Path: cfg.Database.Path,
+	})
 	if err != nil {
 		log.Printf("Failed to initialize database: %v", err)
 		return err
@@ -151,7 +158,7 @@ func utxoChatMain() error {
 	defer func() {
 		// Ensure the database is sync'd and closed on shutdown.
 		log.Printf("Gracefully shutting down the database...")
-		db.close()
+		db.Close()
 	}()
 
 	// Return now if an interrupt signal was triggered.
@@ -160,23 +167,33 @@ func utxoChatMain() error {
 	}
 
 	// Initialize message validator.
-	validator := newValidator(bitcoinClient, db)
+	validator := message.NewValidator(bitcoinClient, db)
 
 	// Initialize P2P network.
-	networkManager, err := newNetworkManager(cfg.Network, validator, db)
+	networkCfg := network.Config{
+		ListenAddr:       cfg.Network.ListenAddr,
+		KnownPeers:       cfg.Network.KnownPeers,
+		HandshakeTimeout: cfg.Network.HandshakeTimeout,
+	}
+	networkManager, err := network.NewManager(networkCfg, validator, db)
 	if err != nil {
 		log.Printf("Failed to initialize network: %v", err)
 		return err
 	}
 	// Start services.
-	if err := networkManager.start(ctx); err != nil {
+	if err := networkManager.Start(ctx); err != nil {
 		log.Printf("Failed to start network: %v", err)
 		return err
 	}
 
 	// Start block notification handler for cleaning up spent outpoints.
-	blockHandler := newBlockHandler(bitcoinClient, db)
-	if err := blockHandler.start(ctx); err != nil {
+	blockHandler := blockchain.NewHandlerWithConfig(bitcoinClient, db, blockchain.Config{
+		NotificationsEnabled: cfg.Blockchain.NotificationsEnabled,
+		MaxReorgDepth:        cfg.Blockchain.MaxReorgDepth,
+		ScanFullBlocks:       cfg.Blockchain.ScanFullBlocks,
+		PollInterval:         cfg.Blockchain.PollInterval,
+	})
+	if err := blockHandler.Start(ctx); err != nil {
 		log.Printf("Failed to start block handler: %v", err)
 		return err
 	}
@@ -194,13 +211,13 @@ func utxoChatMain() error {
 
 	// Shutdown network.
 	log.Printf("Gracefully shutting down network...")
-	if err := networkManager.stop(); err != nil {
+	if err := networkManager.Stop(); err != nil {
 		log.Printf("Error stopping network: %v", err)
 	}
 
 	// Shutdown block handler.
 	log.Printf("Gracefully shutting down block handler...")
-	if err := blockHandler.stop(); err != nil {
+	if err := blockHandler.Stop(); err != nil {
 		log.Printf("Error stopping block handler: %v", err)
 	}
 
@@ -255,8 +272,6 @@ type rotator interface {
 func loadConfig() (*config, error) {
 	// Get the default data directory for the specified operating system
 	defaultDataDir := utils.AppDataDir("utxochat", false)
-	print(defaultDataDir)
-
 	// Parse command line flags
 	configPath := flag.String("config", "config.json", "Path to configuration file")
 	dataDir := flag.String("datadir", defaultDataDir, "Data directory")
@@ -282,17 +297,37 @@ func loadConfig() (*config, error) {
 			return &config{
 				DataDir: *dataDir,
 				Network: networkConfig{
-					ListenAddr: "0.0.0.0:8334",
+					ListenAddr:       "0.0.0.0:8335",
+					KnownPeers:       []string{},
+					HandshakeTimeout: 60,
 				},
 				Bitcoin: bitcoinConfig{
-					RPCURL:  "http://localhost:8332",
-					RPCUser: "",
-					RPCPass: "",
+					RPCURL:     "http://localhost:8332",
+					RPCUser:    "",
+					RPCPass:    "",
+					DisableTLS: true,
 				},
-				Profile:       *profile,
-				CPUProfile:    *cpuProfile,
-				MemoryProfile: *memProfile,
-				TraceProfile:  *traceProfile,
+				Database: databaseConfig{
+					Type: string(database.TypeMemory),
+					Path: filepath.Join(*dataDir, dbNamePrefix+".db"),
+				},
+				Blockchain: blockchainConfig{
+					NotificationsEnabled: true,
+					MaxReorgDepth:        6,
+					ScanFullBlocks:       true,
+					PollInterval:         30,
+				},
+				Message: messageConfig{
+					MaxPayloadSize: 65434,
+					MaxMessageSize: 65536,
+				},
+				Debug: debugConfig{
+					Profile:       *profile,
+					CPUProfile:    *cpuProfile,
+					MemoryProfile: *memProfile,
+					TraceProfile:  *traceProfile,
+					LogLevel:      "info",
+				},
 			}, nil
 		}
 		return nil, fmt.Errorf("error opening config file: %v", err)
@@ -310,16 +345,16 @@ func loadConfig() (*config, error) {
 		cfg.DataDir = *dataDir
 	}
 	if *profile != "" {
-		cfg.Profile = *profile
+		cfg.Debug.Profile = *profile
 	}
 	if *cpuProfile != "" {
-		cfg.CPUProfile = *cpuProfile
+		cfg.Debug.CPUProfile = *cpuProfile
 	}
 	if *memProfile != "" {
-		cfg.MemoryProfile = *memProfile
+		cfg.Debug.MemoryProfile = *memProfile
 	}
 	if *traceProfile != "" {
-		cfg.TraceProfile = *traceProfile
+		cfg.Debug.TraceProfile = *traceProfile
 	}
 
 	// Validate required fields
@@ -327,10 +362,34 @@ func loadConfig() (*config, error) {
 		cfg.DataDir = *dataDir
 	}
 	if cfg.Network.ListenAddr == "" {
-		cfg.Network.ListenAddr = "0.0.0.0:8334"
+		cfg.Network.ListenAddr = "0.0.0.0:8335"
+	}
+	if cfg.Network.HandshakeTimeout == 0 {
+		cfg.Network.HandshakeTimeout = 60
 	}
 	if cfg.Bitcoin.RPCURL == "" {
 		cfg.Bitcoin.RPCURL = "http://localhost:8332"
+	}
+	if cfg.Database.Type == "" {
+		cfg.Database.Type = string(database.TypeMemory)
+	}
+	if cfg.Database.Path == "" {
+		cfg.Database.Path = filepath.Join(cfg.DataDir, dbNamePrefix+".db")
+	}
+	if cfg.Blockchain.MaxReorgDepth == 0 {
+		cfg.Blockchain.MaxReorgDepth = 6
+	}
+	if cfg.Blockchain.PollInterval == 0 {
+		cfg.Blockchain.PollInterval = 30
+	}
+	if cfg.Message.MaxPayloadSize == 0 {
+		cfg.Message.MaxPayloadSize = 65434
+	}
+	if cfg.Message.MaxMessageSize == 0 {
+		cfg.Message.MaxMessageSize = 65536
+	}
+	if cfg.Debug.LogLevel == "" {
+		cfg.Debug.LogLevel = "info"
 	}
 
 	return &cfg, nil
@@ -338,160 +397,66 @@ func loadConfig() (*config, error) {
 
 // config defines the configuration options for UTXOchat.
 type config struct {
-	DataDir       string
-	Network       networkConfig
-	Bitcoin       bitcoinConfig
-	Profile       string
-	CPUProfile    string
-	MemoryProfile string
-	TraceProfile  string
+	DataDir    string
+	Network    networkConfig
+	Bitcoin    bitcoinConfig
+	Database   databaseConfig
+	Blockchain blockchainConfig
+	Message    messageConfig
+	Debug      debugConfig
 }
 
 // networkConfig defines the network configuration for UTXOchat.
 type networkConfig struct {
-	ListenAddr string
+	ListenAddr       string
+	KnownPeers       []string
+	HandshakeTimeout int
 }
 
 // bitcoinConfig defines the Bitcoin node configuration for UTXOchat.
 type bitcoinConfig struct {
-	RPCURL  string
-	RPCUser string
-	RPCPass string
+	RPCURL     string
+	RPCUser    string
+	RPCPass    string
+	DisableTLS bool
 }
 
-// These types and functions are placeholders for the actual implementations.
-// They will be implemented in separate files.
-
-// Bitcoin client related types and functions
-type bitcoinClient struct {
-	config bitcoinConfig
+// databaseConfig defines the database configuration for UTXOchat.
+type databaseConfig struct {
+	Type string
+	Path string
 }
 
-type blockchainInfo struct {
-	Chain  string
-	Blocks int64
+// blockchainConfig defines the blockchain configuration for UTXOchat.
+type blockchainConfig struct {
+	NotificationsEnabled bool
+	MaxReorgDepth        int32
+	ScanFullBlocks       bool
+	PollInterval         int
 }
 
-func newBitcoinClient(cfg bitcoinConfig) (*bitcoinClient, error) {
-	// TODO: Implement Bitcoin client
-	return &bitcoinClient{
-		config: cfg,
-	}, nil
+// messageConfig defines the message configuration for UTXOchat.
+type messageConfig struct {
+	MaxPayloadSize int
+	MaxMessageSize int
 }
 
-func (c *bitcoinClient) getBlockchainInfo(ctx context.Context) (*blockchainInfo, error) {
-	// TODO: Implement GetBlockchainInfo
-	return &blockchainInfo{
-		Chain:  "main",
-		Blocks: 123456,
-	}, nil
+// debugConfig defines the debug configuration for UTXOchat.
+type debugConfig struct {
+	Profile       string
+	CPUProfile    string
+	MemoryProfile string
+	TraceProfile  string
+	LogLevel      string
 }
 
-// Block handler related types and functions
-type blockHandler struct {
-	client *bitcoinClient
-	db     *db
-}
-
-func newBlockHandler(client *bitcoinClient, db *db) *blockHandler {
-	// TODO: Implement block handler
-	return &blockHandler{
-		client: client,
-		db:     db,
-	}
-}
-
-func (h *blockHandler) start(ctx context.Context) error {
-	// TODO: Implement Start
-	return nil
-}
-
-func (h *blockHandler) stop() error {
-	// TODO: Implement Stop
-	return nil
-}
-
-// Database related types and functions
-type db struct {
-	path string
-}
-
-func newDB(path string) (*db, error) {
-	// TODO: Implement NewDB
-	return &db{
-		path: path,
-	}, nil
-}
-
-func (d *db) close() error {
-	// TODO: Implement Close
-	return nil
-}
-
-// Message validation related types and functions
-type validator struct {
-	client *bitcoinClient
-	db     *db
-}
-
-func newValidator(client *bitcoinClient, db *db) *validator {
-	// TODO: Implement NewValidator
-	return &validator{
-		client: client,
-		db:     db,
-	}
-}
-
-// Network related types and functions
-type networkManager struct {
-	config    networkConfig
-	validator *validator
-	db        *db
-}
-
-func newNetworkManager(cfg networkConfig, v *validator, db *db) (*networkManager, error) {
-	// TODO: Implement NewManager
-	return &networkManager{
-		config:    cfg,
-		validator: v,
-		db:        db,
-	}, nil
-}
-
-func (m *networkManager) start(ctx context.Context) error {
-	// TODO: Implement Start
-	return nil
-}
-
-func (m *networkManager) stop() error {
-	// TODO: Implement Stop
-	return nil
-}
-
-// Application layer related types and functions
-type appManager struct {
-	network *networkManager
-	db      *db
-	client  *bitcoinClient
-}
-
-func newAppManager(nm *networkManager, db *db, client *bitcoinClient) *appManager {
-	// TODO: Implement NewManager
-	return &appManager{
-		network: nm,
-		db:      db,
-		client:  client,
-	}
-}
-
-func (m *appManager) start(ctx context.Context) error {
-	// TODO: Implement Start
-	return nil
-}
-
-func (m *appManager) stop() error {
-	// TODO: Implement Stop
-	return nil
+// Update newBitcoinClient to use the new package
+func newBitcoinClient(cfg bitcoinConfig) (*bitcoin.Client, error) {
+	return bitcoin.NewClient(bitcoin.Config{
+		RPCURL:  cfg.RPCURL,
+		RPCUser: cfg.RPCUser,
+		RPCPass: cfg.RPCPass,
+	})
 }
 
 func main() {

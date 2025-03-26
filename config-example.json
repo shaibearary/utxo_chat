@@ -1,0 +1,35 @@
+{
+    "DataDir": ".utxochat",
+    "Network": {
+        "ListenAddr": "0.0.0.0:8335",
+        "KnownPeers": [],
+        "HandshakeTimeout": 60
+    },
+    "Bitcoin": {
+        "RPCURL": "http://localhost:8332",
+        "RPCUser": "your-rpc-username",
+        "RPCPass": "your-rpc-password",
+        "DisableTLS": true
+    },
+    "Database": {
+        "Type": "memory",
+        "Path": ".utxochat/utxochat.db"
+    },
+    "Blockchain": {
+        "NotificationsEnabled": true,
+        "MaxReorgDepth": 6,
+        "ScanFullBlocks": true,
+        "PollInterval": 30
+    },
+    "Message": {
+        "MaxPayloadSize": 65434,
+        "MaxMessageSize": 65536
+    },
+    "Debug": {
+        "Profile": "",
+        "CPUProfile": "",
+        "MemoryProfile": "",
+        "TraceProfile": "",
+        "LogLevel": "info"
+    }
+}

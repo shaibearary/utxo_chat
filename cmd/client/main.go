@@ -2,41 +2,57 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"net/http"
-)
 
-type ChatMessage struct {
-	Content   []byte `json:"content"`
-	Signature []byte `json:"signature"`
-	PublicKey string `json:"public_key"`
-	UtxoTxid  string `json:"utxo_txid"`
-	UtxoVout  uint32 `json:"utxo_vout"`
-}
+	"github.com/shaibearary/utxo_chat/message"
+)
 
 func main() {
 	content := flag.String("message", "Hello UTXO Chat!", "Message content to send")
+	txid := flag.String("txid", "", "UTXO transaction ID")
+	vout := flag.Uint("vout", 0, "UTXO output index")
+	signature := flag.String("signature", "", "Message signature (64 bytes hex)")
 	flag.Parse()
 
-	msg := ChatMessage{
-		Content:   []byte(*content),
-		Signature: []byte("304402deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
-		PublicKey: "02deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-		UtxoTxid:  "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-		UtxoVout:  0,
+	// Convert txid to bytes
+	txidBytes, err := hex.DecodeString(*txid)
+	if err != nil {
+		fmt.Printf("Error decoding txid: %v\n", err)
+		return
+	}
+	var txidArray [32]byte
+	copy(txidArray[:], txidBytes)
+
+	// Convert signature to bytes
+	sigBytes, err := hex.DecodeString(*signature)
+	if err != nil {
+		fmt.Printf("Error decoding signature: %v\n", err)
+		return
+	}
+	var sigArray [64]byte
+	copy(sigArray[:], sigBytes)
+
+	// Create outpoint
+	outpoint := message.Outpoint{
+		TxID:  txidArray,
+		Index: uint32(*vout),
 	}
 
-	fmt.Printf("%+v\n", msg)
-
-	jsonData, err := json.Marshal(msg)
+	// Create message
+	msg, err := message.NewMessage(outpoint, sigArray, []byte(*content))
 	if err != nil {
-		fmt.Printf("Error marshaling JSON: %v\n", err)
+		fmt.Printf("Error creating message: %v\n", err)
 		return
 	}
 
-	resp, err := http.Post("http://127.0.0.1:8333/message", "application/json", bytes.NewBuffer(jsonData))
+	// Serialize message
+	data := msg.Serialize()
+
+	// Send message to server
+	resp, err := http.Post("http://127.0.0.1:8335/message", "application/octet-stream", bytes.NewBuffer(data))
 	if err != nil {
 		fmt.Printf("Error sending message: %v\n", err)
 		return
