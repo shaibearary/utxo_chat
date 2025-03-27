@@ -12,6 +12,16 @@ type MemoryDB struct {
 	mu        sync.RWMutex
 }
 
+// AddMessage implements Database.
+func (db *MemoryDB) AddMessage(ctx context.Context, outpoint Outpoint, data []byte) error {
+	panic("unimplemented")
+}
+
+// GetMessage implements Database.
+func (db *MemoryDB) GetMessage(ctx context.Context, outpoint Outpoint) ([]byte, error) {
+	panic("unimplemented")
+}
+
 // NewMemoryDB creates a new in-memory database.
 func NewMemoryDB() *MemoryDB {
 	return &MemoryDB{
@@ -21,7 +31,7 @@ func NewMemoryDB() *MemoryDB {
 
 // outpointKey generates a unique key for an outpoint.
 func outpointKey(outpoint Outpoint) string {
-	return fmt.Sprintf("%s:%d", outpoint.TxID.String(), outpoint.Index)
+	return fmt.Sprintf("%x:%d", outpoint.TxID, outpoint.Index)
 }
 
 // HasOutpoint checks if the outpoint has been seen before.

@@ -1,14 +1,14 @@
 {
     "DataDir": ".utxochat",
     "Network": {
-      "ListenAddr": "0.0.0.0:8315",
+      "ListenAddr": "0.0.0.0:8335",
       "KnownPeers": [],
       "HandshakeTimeout": 60
     },
     "Bitcoin": {
-      "RPCURL": "bitcoin-mainnet.core.chainstack.com",
-      "RPCUser": "compassionate-spence",
-      "RPCPass": "gully-agent-amuck-purple-wrath-afoot",
+      "RPCURL": "localhost:18443",
+      "RPCUser": "your_username",
+      "RPCPass": "your_password",
       "DisableTLS": true
     },
     "Database": {
