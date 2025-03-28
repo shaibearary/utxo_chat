@@ -1,12 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"encoding/hex"
 	"flag"
 	"fmt"
-	"net/http"
 
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/shaibearary/utxo_chat/message"
 )
 
@@ -14,7 +13,8 @@ func main() {
 	content := flag.String("message", "Hello UTXO Chat!", "Message content to send")
 	txid := flag.String("txid", "", "UTXO transaction ID")
 	vout := flag.Uint("vout", 0, "UTXO output index")
-	signature := flag.String("signature", "", "Message signature (64 bytes hex)")
+	pkScript := flag.String("pkscript", "", "Script pubkey (hex)")
+	privKeyHex := flag.String("privkey", "", "Private key (hex)")
 	flag.Parse()
 
 	// Convert txid to bytes
@@ -26,38 +26,62 @@ func main() {
 	var txidArray [32]byte
 	copy(txidArray[:], txidBytes)
 
-	// Convert signature to bytes
-	sigBytes, err := hex.DecodeString(*signature)
+	// Convert pkscript to bytes
+	pkScriptBytes, err := hex.DecodeString(*pkScript)
 	if err != nil {
-		fmt.Printf("Error decoding signature: %v\n", err)
+		fmt.Printf("Error decoding pkscript: %v\n", err)
 		return
 	}
-	var sigArray [64]byte
-	copy(sigArray[:], sigBytes)
 
-	// Create outpoint
-	outpoint := message.Outpoint{
+	// Convert private key
+	privKeyBytes, err := hex.DecodeString(*privKeyHex)
+	if err != nil {
+		fmt.Printf("Error decoding private key: %v\n", err)
+		return
+	}
+	privKey, _ := btcec.PrivKeyFromBytes(privKeyBytes)
+
+	// Create outpoint for signing
+	outpoint := Outpoint{
+		TxID:     txidArray,
+		Vout:     uint32(*vout),
+		PKScript: pkScriptBytes,
+	}
+
+	// Sign the message
+	sigData, err := SignMessage(outpoint, *content, privKey)
+	if err != nil {
+		fmt.Printf("Error signing message: %v\n", err)
+		return
+	}
+
+	// Print the results
+	fmt.Printf("Message signed successfully!\n")
+	fmt.Printf("Message Hash: %x\n", sigData.MessageHash)
+	fmt.Printf("PKScript: %x\n", sigData.PKScript)
+	fmt.Printf("Witness stack (%d items):\n", len(sigData.Witness))
+	for i, item := range sigData.Witness {
+		fmt.Printf("  [%d]: %x\n", i, item)
+	}
+
+	// Create UTXO chat message
+	msgOutpoint := message.Outpoint{
 		TxID:  txidArray,
 		Index: uint32(*vout),
 	}
 
-	// Create message
-	msg, err := message.NewMessage(outpoint, sigArray, []byte(*content))
+	// Use the first witness item as the signature
+	var sigArray [64]byte
+	if len(sigData.Witness) > 0 {
+		copy(sigArray[:], sigData.Witness[0])
+	}
+
+	// Create and serialize message
+	msg, err := message.NewMessage(msgOutpoint, sigArray, []byte(*content))
 	if err != nil {
 		fmt.Printf("Error creating message: %v\n", err)
 		return
 	}
 
-	// Serialize message
-	data := msg.Serialize()
-
-	// Send message to server
-	resp, err := http.Post("http://127.0.0.1:8335/message", "application/octet-stream", bytes.NewBuffer(data))
-	if err != nil {
-		fmt.Printf("Error sending message: %v\n", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	fmt.Printf("Response Status: %s\n", resp.Status)
+	fmt.Printf("\nFinal serialized message: %x\n", msg.Serialize())
 }

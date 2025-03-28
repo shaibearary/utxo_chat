@@ -77,6 +77,7 @@ type RegtestGetBlockchainInfoResult struct {
 // GetBlockchainInfo retrieves the current blockchain info from the Bitcoin node.
 func (c *Client) GetBlockchainInfo(ctx context.Context) (*BlockchainInfo, error) {
 	// Get blockchain info using the RPC client
+	// use rawrequest because rpcclient cannot handle response in regtest where warning is a slice instead of a string(mainnet)
 	result, err := c.RawRequest("getblockchaininfo", []json.RawMessage{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get blockchain info: %v", err)
@@ -86,11 +87,6 @@ func (c *Client) GetBlockchainInfo(ctx context.Context) (*BlockchainInfo, error)
 	var rawInfo map[string]interface{}
 	if err := json.Unmarshal(result, &rawInfo); err != nil {
 		return nil, fmt.Errorf("failed to parse raw info: %v", err)
-	}
-
-	// Print all fields and their types for debugging
-	for key, value := range rawInfo {
-		fmt.Printf("Field: %s, Type: %T, Value: %v\n", key, value, value)
 	}
 
 	// Convert raw info to BlockchainInfo
