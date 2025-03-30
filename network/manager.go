@@ -19,7 +19,7 @@ import (
 // Manager handles the network operations for UTXOchat.
 type Manager struct {
 	config    Config
-	validator *message.Validator
+	validator *database.Validator
 	db        database.Database
 
 	peers   map[string]*Peer
@@ -31,7 +31,7 @@ type Manager struct {
 }
 
 // NewManager creates a new network manager.
-func NewManager(cfg Config, v *message.Validator, db database.Database) (*Manager, error) {
+func NewManager(cfg Config, v *database.Validator, db database.Database) (*Manager, error) {
 	return &Manager{
 		config:    cfg,
 		validator: v,
@@ -176,10 +176,10 @@ func (m *Manager) connectToPeer(addr string) error {
 
 // getMessageFromDB retrieves a message from the database by outpoint.
 // Note: In a production system, you would enhance database.Database interface to include this
-func (m *Manager) getMessageFromDB(ctx context.Context, outpoint database.Outpoint) ([]byte, error) {
+func (m *Manager) getMessageFromDB(ctx context.Context, outpoint message.Outpoint) ([]byte, error) {
 	// This is a placeholder implementation
 	// In a real implementation, you would call m.db.GetMessage(ctx, outpoint)
-	log.Printf("Getting message for outpoint %x:%d", outpoint.TxID[:], outpoint.Index)
+	log.Printf("Getting message for outpoint %s", outpoint.ToString())
 
 	// TODO: Implement proper message storage and retrieval
 	// For now, just return nil (message not found)
@@ -188,17 +188,17 @@ func (m *Manager) getMessageFromDB(ctx context.Context, outpoint database.Outpoi
 
 // storeMessageInDB stores a message in the database.
 // Note: In a production system, you would enhance database.Database interface to include this
-func (m *Manager) storeMessageInDB(ctx context.Context, outpoint database.Outpoint, msgData []byte) error {
+func (m *Manager) storeMessageInDB(ctx context.Context, outpoint message.Outpoint, msgData []byte) error {
 	// This is a placeholder implementation
 	// In a real implementation, you would call m.db.AddMessage(ctx, outpoint, msgData)
-	log.Printf("Storing message for outpoint %x:%d (%d bytes)", outpoint.TxID[:], outpoint.Index, len(msgData))
+	log.Printf("Storing message for outpoint %s (%d bytes)", outpoint.ToString(), len(msgData))
 
 	// TODO: Implement proper message storage
 	return nil
 }
 
 // broadcastToOtherPeers sends a message to all connected peers except the source peer.
-func (m *Manager) broadcastToOtherPeers(sourcePeer *Peer, outpoint database.Outpoint, msgData []byte) {
+func (m *Manager) broadcastToOtherPeers(sourcePeer *Peer, outpoint message.Outpoint, msgData []byte) {
 	m.peersMu.RLock()
 	defer m.peersMu.RUnlock()
 
@@ -216,10 +216,7 @@ func (m *Manager) broadcastToOtherPeers(sourcePeer *Peer, outpoint database.Outp
 			binary.LittleEndian.PutUint16(header[1:], 1) // 1 inventory item
 
 			// Add outpoint
-			payload := make([]byte, message.OutpointSize)
-			copy(payload[:32], outpoint.TxID[:])
-			binary.LittleEndian.PutUint32(payload[32:], outpoint.Index)
-
+			payload := outpoint[:]
 			// Combine header and payload
 			data := append(header, payload...)
 

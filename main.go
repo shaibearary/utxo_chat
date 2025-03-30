@@ -25,7 +25,6 @@ import (
 	"github.com/shaibearary/utxo_chat/bitcoin"
 	"github.com/shaibearary/utxo_chat/blockchain"
 	"github.com/shaibearary/utxo_chat/database"
-	"github.com/shaibearary/utxo_chat/message"
 	"github.com/shaibearary/utxo_chat/network"
 	"github.com/shaibearary/utxo_chat/utils"
 )
@@ -167,7 +166,7 @@ func utxoChatMain() error {
 	}
 
 	// Initialize message validator.
-	validator := message.NewValidator(bitcoinClient, db)
+	validator := database.NewValidator(bitcoinClient, db)
 
 	// Initialize P2P network.
 	networkCfg := network.Config{

@@ -3,33 +3,38 @@ package database
 import (
 	"context"
 	"sync"
+
+	"github.com/shaibearary/utxo_chat/message"
 )
 
 // MemoryDB is an in-memory implementation of the Database interface.
 type MemoryDB struct {
-	outpoints map[Outpoint]struct{}
+	outpoints map[message.Outpoint]struct{}
 	mu        sync.RWMutex
 }
 
 // AddMessage implements Database.
-func (db *MemoryDB) AddMessage(ctx context.Context, outpoint Outpoint, data []byte) error {
+func (db *MemoryDB) AddMessage(
+	ctx context.Context, outpoint message.Outpoint, data []byte) error {
 	panic("unimplemented")
 }
 
 // GetMessage implements Database.
-func (db *MemoryDB) GetMessage(ctx context.Context, outpoint Outpoint) ([]byte, error) {
+func (db *MemoryDB) GetMessage(
+	ctx context.Context, outpoint message.Outpoint) ([]byte, error) {
 	panic("unimplemented")
 }
 
 // NewMemoryDB creates a new in-memory database.
 func NewMemoryDB() *MemoryDB {
 	return &MemoryDB{
-		outpoints: make(map[Outpoint]struct{}),
+		outpoints: make(map[message.Outpoint]struct{}),
 	}
 }
 
 // HasOutpoint checks if the outpoint has been seen before.
-func (db *MemoryDB) HasOutpoint(ctx context.Context, outpoint Outpoint) (bool, error) {
+func (db *MemoryDB) HasOutpoint(
+	ctx context.Context, outpoint message.Outpoint) (bool, error) {
 	select {
 	case <-ctx.Done():
 		return false, ctx.Err()
@@ -44,7 +49,8 @@ func (db *MemoryDB) HasOutpoint(ctx context.Context, outpoint Outpoint) (bool, e
 }
 
 // AddOutpoint adds an outpoint to the database.
-func (db *MemoryDB) AddOutpoint(ctx context.Context, outpoint Outpoint) error {
+func (db *MemoryDB) AddOutpoint(
+	ctx context.Context, outpoint message.Outpoint) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -59,7 +65,8 @@ func (db *MemoryDB) AddOutpoint(ctx context.Context, outpoint Outpoint) error {
 }
 
 // RemoveOutpoint removes an outpoint from the database.
-func (db *MemoryDB) RemoveOutpoint(ctx context.Context, outpoint Outpoint) error {
+func (db *MemoryDB) RemoveOutpoint(
+	ctx context.Context, outpoint message.Outpoint) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -74,7 +81,8 @@ func (db *MemoryDB) RemoveOutpoint(ctx context.Context, outpoint Outpoint) error
 }
 
 // RemoveOutpoints removes multiple outpoints from the database.
-func (db *MemoryDB) RemoveOutpoints(ctx context.Context, outpoints []Outpoint) error {
+func (db *MemoryDB) RemoveOutpoints(
+	ctx context.Context, outpoints []message.Outpoint) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

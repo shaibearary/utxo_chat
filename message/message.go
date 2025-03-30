@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 )
 
 const (
@@ -33,9 +35,18 @@ var (
 )
 
 // Outpoint represents a Bitcoin transaction output
-type Outpoint struct {
-	TxID  [32]byte // Transaction ID
-	Index uint32   // Output index
+type Outpoint [36]byte
+
+func (op Outpoint) ToTxidIdx() (*chainhash.Hash, uint32) {
+	// ignoring the returned error here since we are giving it 32 bytes from a
+	// fixed 36 byte array, and the only possible error is due to incorrect
+	// array length
+	hash, _ := chainhash.NewHash(op[:32])
+	return hash, binary.BigEndian.Uint32(op[32:36])
+}
+
+func (op Outpoint) ToString() string {
+	return fmt.Sprintf("%x:%d", op[:32], binary.BigEndian.Uint32(op[32:36]))
 }
 
 // Message represents a UTXOchat message
@@ -65,8 +76,7 @@ func (m *Message) Serialize() []byte {
 	buf := make([]byte, HeaderSize+len(m.Payload))
 
 	// Write outpoint
-	copy(buf[0:32], m.Outpoint.TxID[:])
-	binary.LittleEndian.PutUint32(buf[32:36], m.Outpoint.Index)
+	copy(buf[0:36], m.Outpoint[:])
 
 	// Write signature
 	copy(buf[36:100], m.Signature[:])
@@ -89,8 +99,7 @@ func Deserialize(data []byte) (*Message, error) {
 	msg := &Message{}
 
 	// Read outpoint
-	copy(msg.Outpoint.TxID[:], data[0:32])
-	msg.Outpoint.Index = binary.LittleEndian.Uint32(data[32:36])
+	copy(msg.Outpoint[:], data[0:36])
 
 	// Read signature
 	copy(msg.Signature[:], data[36:100])
