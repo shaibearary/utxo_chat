@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/shaibearary/utxo_chat/database"
 	"github.com/shaibearary/utxo_chat/message"
 )
 
@@ -135,17 +134,8 @@ func (p *Peer) handleInvMessage() error {
 		if _, err := io.ReadFull(p.conn, outpointBytes); err != nil {
 			return fmt.Errorf("failed to read outpoint %d: %v", i, err)
 		}
-
-		// Convert to outpoint
-		var txid [32]byte
-		copy(txid[:], outpointBytes[:32])
-		index := binary.LittleEndian.Uint32(outpointBytes[32:])
-
-		// Check if we already have this outpoint
-		outpoint := database.Outpoint{
-			TxID:  txid,
-			Index: index,
-		}
+		var outpoint message.Outpoint
+		copy(outpoint[:], outpointBytes[:])
 
 		// Check in the database if we've already seen this outpoint
 		hasOutpoint, err := p.manager.db.HasOutpoint(p.ctx, outpoint)
@@ -173,15 +163,8 @@ func (p *Peer) handleGetDataMessage() error {
 	}
 
 	// Convert to outpoint
-	var txid [32]byte
-	copy(txid[:], outpointBytes[:32])
-	index := binary.LittleEndian.Uint32(outpointBytes[32:])
-
-	// Create outpoint
-	outpoint := database.Outpoint{
-		TxID:  txid,
-		Index: index,
-	}
+	var outpoint message.Outpoint
+	copy(outpoint[:], outpointBytes[:])
 
 	// Get the message from database
 	msgData, err := p.manager.getMessageFromDB(p.ctx, outpoint)
@@ -191,7 +174,7 @@ func (p *Peer) handleGetDataMessage() error {
 
 	// If we don't have the message, ignore
 	if msgData == nil {
-		log.Printf("Peer requested message we don't have: %s:%d", hex.EncodeToString(txid[:]), index)
+		log.Printf("Peer requested message we don't have: %s", outpoint.ToString())
 		return nil
 	}
 
@@ -239,18 +222,14 @@ func (p *Peer) handleDataMessage() error {
 	}
 
 	// If valid, save to database and broadcast to other peers
-	outpoint := database.Outpoint{
-		TxID:  msg.Outpoint.TxID,
-		Index: msg.Outpoint.Index,
-	}
 
 	// Store original message data in database
-	if err := p.manager.storeMessageInDB(p.ctx, outpoint, msgData); err != nil {
+	if err := p.manager.storeMessageInDB(p.ctx, msg.Outpoint, msgData); err != nil {
 		return fmt.Errorf("failed to save message to database: %v", err)
 	}
 
 	// Broadcast to other peers
-	p.manager.broadcastToOtherPeers(p, outpoint, msgData)
+	p.manager.broadcastToOtherPeers(p, msg.Outpoint, msgData)
 
 	return nil
 }
@@ -269,7 +248,7 @@ func extractPubKey(payload []byte) (string, error) {
 }
 
 // requestData sends a getdata message to the peer
-func (p *Peer) requestData(outpoint database.Outpoint) error {
+func (p *Peer) requestData(outpoint message.Outpoint) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -280,8 +259,7 @@ func (p *Peer) requestData(outpoint database.Outpoint) error {
 	// Prepare getdata message
 	msgBytes := make([]byte, 1+message.OutpointSize)
 	msgBytes[0] = byte(MessageTypeGetData)
-	copy(msgBytes[1:33], outpoint.TxID[:])
-	binary.LittleEndian.PutUint32(msgBytes[33:], outpoint.Index)
+	copy(msgBytes[1:37], outpoint[:])
 
 	// Send message
 	_, err := p.conn.Write(msgBytes)

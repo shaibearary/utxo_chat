@@ -2,40 +2,39 @@ package database
 
 import (
 	"context"
-	"fmt"
 	"sync"
+
+	"github.com/shaibearary/utxo_chat/message"
 )
 
 // MemoryDB is an in-memory implementation of the Database interface.
 type MemoryDB struct {
-	outpoints map[string]struct{}
+	outpoints map[message.Outpoint]struct{}
 	mu        sync.RWMutex
 }
 
 // AddMessage implements Database.
-func (db *MemoryDB) AddMessage(ctx context.Context, outpoint Outpoint, data []byte) error {
+func (db *MemoryDB) AddMessage(
+	ctx context.Context, outpoint message.Outpoint, data []byte) error {
 	panic("unimplemented")
 }
 
 // GetMessage implements Database.
-func (db *MemoryDB) GetMessage(ctx context.Context, outpoint Outpoint) ([]byte, error) {
+func (db *MemoryDB) GetMessage(
+	ctx context.Context, outpoint message.Outpoint) ([]byte, error) {
 	panic("unimplemented")
 }
 
 // NewMemoryDB creates a new in-memory database.
 func NewMemoryDB() *MemoryDB {
 	return &MemoryDB{
-		outpoints: make(map[string]struct{}),
+		outpoints: make(map[message.Outpoint]struct{}),
 	}
 }
 
-// outpointKey generates a unique key for an outpoint.
-func outpointKey(outpoint Outpoint) string {
-	return fmt.Sprintf("%x:%d", outpoint.TxID, outpoint.Index)
-}
-
 // HasOutpoint checks if the outpoint has been seen before.
-func (db *MemoryDB) HasOutpoint(ctx context.Context, outpoint Outpoint) (bool, error) {
+func (db *MemoryDB) HasOutpoint(
+	ctx context.Context, outpoint message.Outpoint) (bool, error) {
 	select {
 	case <-ctx.Done():
 		return false, ctx.Err()
@@ -45,12 +44,13 @@ func (db *MemoryDB) HasOutpoint(ctx context.Context, outpoint Outpoint) (bool, e
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	_, exists := db.outpoints[outpointKey(outpoint)]
+	_, exists := db.outpoints[outpoint]
 	return exists, nil
 }
 
 // AddOutpoint adds an outpoint to the database.
-func (db *MemoryDB) AddOutpoint(ctx context.Context, outpoint Outpoint) error {
+func (db *MemoryDB) AddOutpoint(
+	ctx context.Context, outpoint message.Outpoint) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -60,12 +60,13 @@ func (db *MemoryDB) AddOutpoint(ctx context.Context, outpoint Outpoint) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	db.outpoints[outpointKey(outpoint)] = struct{}{}
+	db.outpoints[outpoint] = struct{}{}
 	return nil
 }
 
 // RemoveOutpoint removes an outpoint from the database.
-func (db *MemoryDB) RemoveOutpoint(ctx context.Context, outpoint Outpoint) error {
+func (db *MemoryDB) RemoveOutpoint(
+	ctx context.Context, outpoint message.Outpoint) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -75,12 +76,13 @@ func (db *MemoryDB) RemoveOutpoint(ctx context.Context, outpoint Outpoint) error
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	delete(db.outpoints, outpointKey(outpoint))
+	delete(db.outpoints, outpoint)
 	return nil
 }
 
 // RemoveOutpoints removes multiple outpoints from the database.
-func (db *MemoryDB) RemoveOutpoints(ctx context.Context, outpoints []Outpoint) error {
+func (db *MemoryDB) RemoveOutpoints(
+	ctx context.Context, outpoints []message.Outpoint) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -91,7 +93,7 @@ func (db *MemoryDB) RemoveOutpoints(ctx context.Context, outpoints []Outpoint) e
 	defer db.mu.Unlock()
 
 	for _, outpoint := range outpoints {
-		delete(db.outpoints, outpointKey(outpoint))
+		delete(db.outpoints, outpoint)
 	}
 	return nil
 }

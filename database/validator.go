@@ -1,4 +1,4 @@
-package message
+package database
 
 import (
 	"context"
@@ -8,17 +8,17 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/shaibearary/utxo_chat/bitcoin"
-	"github.com/shaibearary/utxo_chat/database"
+	"github.com/shaibearary/utxo_chat/message"
 )
 
 // Validator handles message validation including UTXO ownership and signatures.
 type Validator struct {
 	client *bitcoin.Client
-	db     database.Database
+	db     Database
 }
 
 // NewValidator creates a new message validator.
-func NewValidator(client *bitcoin.Client, db database.Database) *Validator {
+func NewValidator(client *bitcoin.Client, db Database) *Validator {
 	return &Validator{
 		client: client,
 		db:     db,
@@ -26,17 +26,10 @@ func NewValidator(client *bitcoin.Client, db database.Database) *Validator {
 }
 
 // ValidateMessage validates a message including UTXO ownership and signature.
-func (v *Validator) ValidateMessage(ctx context.Context, msg *Message, pubKeyHex string) error {
-	// Convert outpoint txid to string
-	txid := chainhash.Hash(msg.Outpoint.TxID)
+func (v *Validator) ValidateMessage(
+	ctx context.Context, msg *message.Message, pubKeyHex string) error {
 
-	// Check if we've already seen this outpoint
-	outpoint := database.Outpoint{
-		TxID:  txid,
-		Index: msg.Outpoint.Index,
-	}
-
-	seen, err := v.db.HasOutpoint(ctx, outpoint)
+	seen, err := v.db.HasOutpoint(ctx, msg.Outpoint)
 	if err != nil {
 		return fmt.Errorf("database error: %v", err)
 	}
@@ -46,7 +39,7 @@ func (v *Validator) ValidateMessage(ctx context.Context, msg *Message, pubKeyHex
 	}
 
 	// Verify UTXO ownership
-	if err := v.VerifyUTXOOwnership(ctx, txid.String(), msg.Outpoint.Index, pubKeyHex); err != nil {
+	if err := v.VerifyUTXOOwnership(ctx, msg.Outpoint, pubKeyHex); err != nil {
 		return fmt.Errorf("UTXO verification failed: %v", err)
 	}
 
@@ -56,7 +49,7 @@ func (v *Validator) ValidateMessage(ctx context.Context, msg *Message, pubKeyHex
 	}
 
 	// Add outpoint to the database
-	if err := v.db.AddOutpoint(ctx, outpoint); err != nil {
+	if err := v.db.AddOutpoint(ctx, msg.Outpoint); err != nil {
 		return fmt.Errorf("failed to add outpoint to database: %v", err)
 	}
 
@@ -64,13 +57,9 @@ func (v *Validator) ValidateMessage(ctx context.Context, msg *Message, pubKeyHex
 }
 
 // VerifyUTXOOwnership verifies that the given public key owns the specified UTXO.
-func (v *Validator) VerifyUTXOOwnership(ctx context.Context, txid string, vout uint32, pubKeyHex string) error {
-	// Convert txid string to hash
-	hash, err := chainhash.NewHashFromStr(txid)
-	if err != nil {
-		return fmt.Errorf("invalid txid: %v", err)
-	}
-
+func (v *Validator) VerifyUTXOOwnership(
+	ctx context.Context, outpoint message.Outpoint, pubKeyHex string) error {
+	hash, vout := outpoint.ToTxidIdx()
 	// Get the UTXO from Bitcoin node
 	txOut, err := v.client.GetTxOut(hash, vout, false)
 	if err != nil {
