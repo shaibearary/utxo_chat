@@ -2,13 +2,12 @@ package database
 
 import (
 	"context"
-	"fmt"
 	"sync"
 )
 
 // MemoryDB is an in-memory implementation of the Database interface.
 type MemoryDB struct {
-	outpoints map[string]struct{}
+	outpoints map[Outpoint]struct{}
 	mu        sync.RWMutex
 }
 
@@ -25,13 +24,8 @@ func (db *MemoryDB) GetMessage(ctx context.Context, outpoint Outpoint) ([]byte, 
 // NewMemoryDB creates a new in-memory database.
 func NewMemoryDB() *MemoryDB {
 	return &MemoryDB{
-		outpoints: make(map[string]struct{}),
+		outpoints: make(map[Outpoint]struct{}),
 	}
-}
-
-// outpointKey generates a unique key for an outpoint.
-func outpointKey(outpoint Outpoint) string {
-	return fmt.Sprintf("%x:%d", outpoint.TxID, outpoint.Index)
 }
 
 // HasOutpoint checks if the outpoint has been seen before.
@@ -45,7 +39,7 @@ func (db *MemoryDB) HasOutpoint(ctx context.Context, outpoint Outpoint) (bool, e
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	_, exists := db.outpoints[outpointKey(outpoint)]
+	_, exists := db.outpoints[outpoint]
 	return exists, nil
 }
 
@@ -60,7 +54,7 @@ func (db *MemoryDB) AddOutpoint(ctx context.Context, outpoint Outpoint) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	db.outpoints[outpointKey(outpoint)] = struct{}{}
+	db.outpoints[outpoint] = struct{}{}
 	return nil
 }
 
@@ -75,7 +69,7 @@ func (db *MemoryDB) RemoveOutpoint(ctx context.Context, outpoint Outpoint) error
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	delete(db.outpoints, outpointKey(outpoint))
+	delete(db.outpoints, outpoint)
 	return nil
 }
 
@@ -91,7 +85,7 @@ func (db *MemoryDB) RemoveOutpoints(ctx context.Context, outpoints []Outpoint) e
 	defer db.mu.Unlock()
 
 	for _, outpoint := range outpoints {
-		delete(db.outpoints, outpointKey(outpoint))
+		delete(db.outpoints, outpoint)
 	}
 	return nil
 }

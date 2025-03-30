@@ -23,7 +23,4 @@ type Database interface {
 }
 
 // Outpoint represents a Bitcoin transaction output
-type Outpoint struct {
-	TxID  [32]byte
-	Index uint32
-}
+type Outpoint [36]byte
