@@ -1,3 +1,19 @@
+// UTXO Chat - A decentralized messaging system using Bitcoin UTXOs
+// Copyright (C) 2024 UTXO Chat developers
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 package main
 
 import (
@@ -8,6 +24,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net"
 	"strings"
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
@@ -21,6 +38,17 @@ type Outpoint struct {
 	TxID  [32]byte
 	Index uint32
 }
+
+const (
+	// MessageTypeData is sent to deliver messages (from network/peer.go)
+	messageTypeData byte = 0x03
+	// ServerAddress is the address the UTXO Chat node listens on
+	serverAddress = "localhost:8335"
+	// OutpointSize is the expected byte length of an outpoint (txid + vout index)
+	outpointSize = 36
+	// SignatureSize is the expected byte length of a signature
+	signatureSize = 64
+)
 
 // SignMessageWithTaproot signs a message using BIP322
 func SignMessageWithTaproot(descriptor string, outpoint Outpoint, message string) ([]byte, error) {
@@ -149,18 +177,25 @@ func SignMessageWithTaproot(descriptor string, outpoint Outpoint, message string
 	// Add payload
 	msg = append(msg, []byte(message)...)
 
+	// Log the different parts of the message structure
+	log.Printf("Message structure breakdown:")
+	log.Printf("  Outpoint (%d bytes): %x", len(outpoint.TxID)+4, msg[:outpointSize])
+	log.Printf("  Signature (%d bytes): %x", signatureSize, msg[outpointSize:outpointSize+signatureSize])
+	log.Printf("  Length field (%d bytes): %x (decimal: %d)", 2, msg[outpointSize+signatureSize:outpointSize+signatureSize+2], length)
+	log.Printf("  Payload (%d bytes): %s", len(message), message)
+	log.Printf("Total message size: %d bytes", len(msg))
+
 	return msg, nil
 }
 
 func main() {
 	// Command line flags
 	descriptor := flag.String("descriptor", "tr(tprv8ZgxMBicQKsPeWrZe5tMwsV3m7CtZdHRH9sas8S6D87NwVrMgUh9NdoyC9mZYJSNojGWiDSw9NAZspQFzVp9i6KRoKQxQvMspYEp64JW6nF/86h/1h/0h/0/*)#7j579lp7", "Taproot descriptor")
-	txid := flag.String("txid", "0000000000000000000000000000000000000000000000000000000000000000", "Transaction ID")
+	txid := flag.String("txid", "77c6c3037ac3dd953aff22f9dff8ebca4f947e29b0bb6d348c1aaa049a79d24a", "Transaction ID")
 	vout := flag.Uint("vout", 0, "Output index")
 	message := flag.String("message", "Hello, UTXO Chat!", "Message to sign")
 	flag.Parse()
 
-	// Create outpoint
 	var outpoint Outpoint
 	txidBytes, _ := hex.DecodeString(*txid)
 	copy(outpoint.TxID[:], txidBytes)
@@ -171,8 +206,23 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error signing message: %v", err)
 	}
+	// Connect to the UTXO Chat server
+	conn, err := net.Dial("tcp", serverAddress)
+	if err != nil {
+		log.Fatalf("Failed to connect to server: %v", err)
+	}
+	defer conn.Close()
 
-	// Print results
-	fmt.Printf("Message: %s\n", *message)
-	fmt.Printf("Serialized Message: %x\n", msg)
+	// Prepare message with type header (messageTypeData = 0x03)
+	fullMsg := []byte{messageTypeData}
+	fullMsg = append(fullMsg, msg...)
+
+	// Send the message
+	_, err = conn.Write(fullMsg)
+	if err != nil {
+		log.Fatalf("Failed to send message: %v", err)
+	}
+
+	log.Printf("Message sent successfully to %s", serverAddress)
+
 }
