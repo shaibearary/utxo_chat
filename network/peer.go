@@ -5,6 +5,7 @@
 package network
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
@@ -65,7 +66,8 @@ func (p *Peer) Handle() {
 	p.conn.SetReadDeadline(time.Time{})
 
 	// Start reading messages from peer
-	go p.readMessages()
+	p.readMessages()
+
 }
 
 // readMessages reads and processes incoming messages from the peer
@@ -73,84 +75,69 @@ func (p *Peer) readMessages() {
 	defer func() {
 		p.Disconnect()
 	}()
+	reader := bufio.NewReader(p.conn)
 
 	for {
-		// Check if we're being asked to disconnect
+
 		select {
 		case <-p.disconnect:
+			log.Printf("Disconnect signal received for peer %s", p.addr)
 			return
 		default:
 		}
 
-		// Read message type
-		// Set a read deadline to prevent hanging on malicious connections
-		p.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-		defer p.conn.SetReadDeadline(time.Time{}) // Reset deadline after read
+		// Log the incoming message
+		log.Printf("Receiving message from peer %s", p.addr)
 
-		// Log the read attempt
-		log.Printf("Reading message from peer %s", p.addr)
-
-		// Create a buffer to read the full message
-		// First read the message header to determine size
-		headerBuf := make([]byte, 4) // Assuming a 4-byte header with message size
-		if _, err := io.ReadFull(p.conn, headerBuf); err != nil {
-			log.Printf("Error reading message header from peer %s: %v", p.addr, err)
-			return
+		// --- Read Message Type ---
+		// Read exactly one byte for the message type
+		msgTypeByte, err := reader.ReadByte()
+		if err != nil {
+			// Handle common errors cleanly
+			if err == io.EOF {
+				log.Printf("Connection closed by peer %s (EOF)", p.addr)
+			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				log.Printf("Read timeout from peer %s: %v", p.addr, err)
+				// You might want to continue here or disconnect depending on your protocol
+			} else if opErr, ok := err.(*net.OpError); ok && opErr.Err.Error() == "use of closed network connection" {
+				// This specific check might be redundant if EOF covers it, but can be explicit
+				log.Printf("Attempted read on closed connection from peer %s", p.addr)
+			} else {
+				log.Printf("Error reading message type from peer %s: %v", p.addr, err)
+			}
+			return // Disconnect on any read error
 		}
 
-		// Parse message size from header
-		messageSize := binary.LittleEndian.Uint32(headerBuf)
+		msgType := MessageType(msgTypeByte)
+		log.Printf("Received message type %d (0x%x) from peer %s", msgType, msgType, p.addr)
 
-		// Sanity check on message size to prevent memory exhaustion attacks
-		// Adjust the max size based on your application's requirements
-		const maxMessageSize = 1024 * 1024 // 1MB max message size
-		if messageSize > maxMessageSize {
-			log.Printf("Message from peer %s exceeds maximum size (%d > %d)",
-				p.addr, messageSize, maxMessageSize)
-			return
-		}
-
-		// Read the full message body
-		messageBuf := make([]byte, messageSize)
-		if _, err := io.ReadFull(p.conn, messageBuf); err != nil {
-			log.Printf("Error reading message body from peer %s: %v", p.addr, err)
-			return
-		}
-
-		// Log the complete message
-		log.Printf("Received complete message from peer %s: %d bytes", p.addr, messageSize)
-		log.Printf("Message content: %x", messageBuf)
-		msgTypeBytes := make([]byte, 1)
-		if _, err := io.ReadFull(p.conn, msgTypeBytes); err != nil {
-			log.Printf("Error reading message type from peer %s: %v", p.addr, err)
-			return
-		}
-
-		msgType := MessageType(msgTypeBytes[0])
-
-		// Process based on message type
+		// --- Process based on message type ---
+		// Now read the rest of the message based on its type
 		switch msgType {
 		case MessageTypeInv:
+			// Pass the reader to the handler function
 			if err := p.handleInvMessage(); err != nil {
 				log.Printf("Error handling inv message from peer %s: %v", p.addr, err)
 				return
 			}
 
 		case MessageTypeGetData:
+			// Pass the reader to the handler function
 			if err := p.handleGetDataMessage(); err != nil {
 				log.Printf("Error handling getdata message from peer %s: %v", p.addr, err)
 				return
 			}
 
 		case MessageTypeData:
+			// Pass the reader to the handler function
 			if err := p.handleDataMessage(); err != nil {
 				log.Printf("Error handling data message from peer %s: %v", p.addr, err)
 				return
 			}
 
 		default:
-			log.Printf("Received unknown message type %d from peer %s", msgType, p.addr)
-			return
+			log.Printf("Received unknown message type %d from peer %s. Disconnecting.", msgType, p.addr)
+			return // Disconnect on unknown type
 		}
 	}
 }
@@ -363,6 +350,9 @@ func (p *Peer) Disconnect() {
 
 	// Signal disconnect
 	close(p.disconnect)
+
+	// Log closure *before* removing from list
+	log.Printf("Connection from %s closed", p.addr)
 
 	// Remove from manager's peer list
 	p.manager.removePeerFromList(p)
