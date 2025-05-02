@@ -47,3 +47,8 @@ tmp/
 
 # Config files
 config/config.json
+config.json
+
+cmd/client/examples
+
+scripts/setup_regtest.sh

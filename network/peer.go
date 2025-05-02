@@ -83,6 +83,43 @@ func (p *Peer) readMessages() {
 		}
 
 		// Read message type
+		// Set a read deadline to prevent hanging on malicious connections
+		p.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		defer p.conn.SetReadDeadline(time.Time{}) // Reset deadline after read
+
+		// Log the read attempt
+		log.Printf("Reading message from peer %s", p.addr)
+
+		// Create a buffer to read the full message
+		// First read the message header to determine size
+		headerBuf := make([]byte, 4) // Assuming a 4-byte header with message size
+		if _, err := io.ReadFull(p.conn, headerBuf); err != nil {
+			log.Printf("Error reading message header from peer %s: %v", p.addr, err)
+			return
+		}
+
+		// Parse message size from header
+		messageSize := binary.LittleEndian.Uint32(headerBuf)
+
+		// Sanity check on message size to prevent memory exhaustion attacks
+		// Adjust the max size based on your application's requirements
+		const maxMessageSize = 1024 * 1024 // 1MB max message size
+		if messageSize > maxMessageSize {
+			log.Printf("Message from peer %s exceeds maximum size (%d > %d)",
+				p.addr, messageSize, maxMessageSize)
+			return
+		}
+
+		// Read the full message body
+		messageBuf := make([]byte, messageSize)
+		if _, err := io.ReadFull(p.conn, messageBuf); err != nil {
+			log.Printf("Error reading message body from peer %s: %v", p.addr, err)
+			return
+		}
+
+		// Log the complete message
+		log.Printf("Received complete message from peer %s: %d bytes", p.addr, messageSize)
+		log.Printf("Message content: %x", messageBuf)
 		msgTypeBytes := make([]byte, 1)
 		if _, err := io.ReadFull(p.conn, msgTypeBytes); err != nil {
 			log.Printf("Error reading message type from peer %s: %v", p.addr, err)

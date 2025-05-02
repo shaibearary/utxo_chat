@@ -120,3 +120,80 @@ go run main.go -message "Your test message"
    - Add message history queries
 
 ## Contributing
+
+# UTXO Chat Testing Environment
+
+This project provides scripts to set up and test a Bitcoin regtest environment for UTXO chat development.
+
+## Prerequisites
+
+- Bitcoin Core installed and in your PATH
+- Basic understanding of Bitcoin's regtest mode
+
+## Setup
+
+1. Make the scripts executable:
+```bash
+chmod +x scripts/*.sh
+```
+
+2. Start the regtest environment:
+```bash
+./scripts/setup_regtest.sh
+```
+
+This will:
+- Create three nodes (node1, node2, node3)
+- Start them with different configurations
+- Connect them together
+- Generate initial blocks for testing
+
+## Testing
+
+Use the test script to interact with the regtest environment:
+```bash
+./scripts/test_utxo_chat.sh
+```
+
+The script provides several functions:
+- `get_new_address`: Get a new address from a node
+- `get_balance`: Check wallet balance
+- `send_coins`: Send coins between addresses
+- `mine_blocks`: Mine new blocks
+
+Example usage:
+```bash
+# Get a new address from node1
+get_new_address "node1" "wallet1"
+
+# Check balance
+get_balance "node1" "wallet1"
+
+# Mine blocks
+mine_blocks "node1" 1
+```
+
+## Cleanup
+
+When you're done testing, clean up the environment:
+```bash
+./scripts/cleanup_regtest.sh
+```
+
+This will:
+- Stop all regtest nodes
+- Remove the regtest directories
+
+## Node Configuration
+
+- node1: Descriptor wallet, RPC port 18443
+- node2: Non-descriptor wallet, RPC port 18444
+- node3: Descriptor wallet, RPC port 18445
+
+## Troubleshooting
+
+If you encounter issues:
+1. Check if Bitcoin Core is properly installed
+2. Ensure no other regtest nodes are running
+3. Check the regtest directories for any leftover files
+4. Try running the cleanup script before starting fresh
