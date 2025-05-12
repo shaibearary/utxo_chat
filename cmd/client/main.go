@@ -26,6 +26,7 @@ import (
 	"math"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -177,6 +178,14 @@ func SignMessageWithTaproot(descriptor string, outpoint Outpoint, message string
 	// Add payload
 	msg = append(msg, []byte(message)...)
 
+	// Prepend message type (MessageTypeData = 0x03) to the message
+	msgWithType := make([]byte, 0, 1+len(msg))
+	msgWithType = append(msgWithType, messageTypeData)
+	msgWithType = append(msgWithType, msg...)
+
+	// Replace the original message with the typed message
+	msg = msgWithType
+
 	// Log the different parts of the message structure
 	log.Printf("Message structure breakdown:")
 	log.Printf("  Outpoint (%d bytes): %x", len(outpoint.TxID)+4, msg[:outpointSize])
@@ -185,7 +194,7 @@ func SignMessageWithTaproot(descriptor string, outpoint Outpoint, message string
 	log.Printf("  Payload (%d bytes): %s", len(message), message)
 	log.Printf("Total message size: %d bytes", len(msg))
 
-	return msg, nil
+	return msgWithType, nil
 }
 
 func main() {
@@ -223,6 +232,12 @@ func main() {
 		log.Fatalf("Failed to send message: %v", err)
 	}
 
-	log.Printf("Message sent successfully to %s", serverAddress)
+	fmt.Printf("Successfully sent %d bytes.\n", len(fullMsg))
 
+	// Add a short delay to allow the server time to read before closing
+	fmt.Println("Waiting briefly before closing connection...")
+	time.Sleep(10 * time.Second)
+	fmt.Println("Closing connection.")
+
+	// Optional: Add logic here to read a response from the server if expected
 }
