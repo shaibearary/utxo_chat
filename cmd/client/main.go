@@ -22,11 +22,11 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net"
 	"strings"
-	"time"
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -178,14 +178,6 @@ func SignMessageWithTaproot(descriptor string, outpoint Outpoint, message string
 	// Add payload
 	msg = append(msg, []byte(message)...)
 
-	// Prepend message type (MessageTypeData = 0x03) to the message
-	msgWithType := make([]byte, 0, 1+len(msg))
-	msgWithType = append(msgWithType, messageTypeData)
-	msgWithType = append(msgWithType, msg...)
-
-	// Replace the original message with the typed message
-	msg = msgWithType
-
 	// Log the different parts of the message structure
 	log.Printf("Message structure breakdown:")
 	log.Printf("  Outpoint (%d bytes): %x", len(outpoint.TxID)+4, msg[:outpointSize])
@@ -194,14 +186,14 @@ func SignMessageWithTaproot(descriptor string, outpoint Outpoint, message string
 	log.Printf("  Payload (%d bytes): %s", len(message), message)
 	log.Printf("Total message size: %d bytes", len(msg))
 
-	return msgWithType, nil
+	return msg, nil
 }
 
 func main() {
 	// Command line flags
-	descriptor := flag.String("descriptor", "tr(tprv8ZgxMBicQKsPeWrZe5tMwsV3m7CtZdHRH9sas8S6D87NwVrMgUh9NdoyC9mZYJSNojGWiDSw9NAZspQFzVp9i6KRoKQxQvMspYEp64JW6nF/86h/1h/0h/0/*)#7j579lp7", "Taproot descriptor")
-	txid := flag.String("txid", "77c6c3037ac3dd953aff22f9dff8ebca4f947e29b0bb6d348c1aaa049a79d24a", "Transaction ID")
-	vout := flag.Uint("vout", 0, "Output index")
+	descriptor := flag.String("descriptor", "tprv8ZgxMBicQKsPd9tkUFdaFQ3HSViR6rSQD75YToUJusnMd64hw2rwecHJohLZswiYa3mXEErjfkk79fo8jRbVeYzuHtTRB214iZz3s9kJYxM/84h/1h/0h/1/*)#zshpdrr0", "Taproot descriptor")
+	txid := flag.String("txid", "f63e8bae313e2f88a086b6927a81fe25ec43da550db8d714575abd1c22422021", "Transaction ID")
+	vout := flag.Uint("vout", 1, "Output index")
 	message := flag.String("message", "Hello, UTXO Chat!", "Message to sign")
 	flag.Parse()
 
@@ -215,6 +207,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error signing message: %v", err)
 	}
+
 	// Connect to the UTXO Chat server
 	conn, err := net.Dial("tcp", serverAddress)
 	if err != nil {
@@ -223,7 +216,8 @@ func main() {
 	defer conn.Close()
 
 	// Prepare message with type header (messageTypeData = 0x03)
-	fullMsg := []byte{messageTypeData}
+	fullMsg := make([]byte, 0, 1+len(msg))
+	fullMsg = append(fullMsg, messageTypeData)
 	fullMsg = append(fullMsg, msg...)
 
 	// Send the message
@@ -233,11 +227,27 @@ func main() {
 	}
 
 	fmt.Printf("Successfully sent %d bytes.\n", len(fullMsg))
+	// Print the full message in hex for debugging
+	fmt.Println("Full message hex dump:")
+	fmt.Printf("%x\n", fullMsg)
 
-	// Add a short delay to allow the server time to read before closing
-	fmt.Println("Waiting briefly before closing connection...")
-	time.Sleep(10 * time.Second)
-	fmt.Println("Closing connection.")
+	// Print a more detailed breakdown of the message
+	fmt.Println("\nMessage breakdown:")
+	fmt.Printf("Message Type: %x\n", fullMsg[0])
+	fmt.Printf("Outpoint (txid+vout): %x\n", fullMsg[1:37])
+	fmt.Printf("Signature: %x\n", fullMsg[37:101])
+	fmt.Printf("Length field: %x (decimal: %d)\n", fullMsg[101:103], binary.LittleEndian.Uint16(fullMsg[101:103]))
+	fmt.Printf("Payload: %s\n", fullMsg[103:])
 
-	// Optional: Add logic here to read a response from the server if expected
+	// Wait for server response
+	fmt.Println("Waiting for server response...")
+	response := make([]byte, 1024)
+	n, err := conn.Read(response)
+	if err != nil {
+		if err != io.EOF {
+			log.Printf("Error reading response: %v", err)
+		}
+	} else {
+		fmt.Printf("Received response (%d bytes): %s\n", n, response[:n])
+	}
 }

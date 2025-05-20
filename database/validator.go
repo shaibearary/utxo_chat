@@ -2,10 +2,12 @@ package database
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
+	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/shaibearary/utxo_chat/bitcoin"
 	"github.com/shaibearary/utxo_chat/message"
@@ -100,4 +102,35 @@ func (v *Validator) VerifySignature(message []byte, signature []byte, pubKeyHex 
 	}
 
 	return nil
+}
+
+// GetTxOut retrieves a transaction output from the Bitcoin node.
+func (v *Validator) GetTxOut(txid *chainhash.Hash, vout uint32, includeMempool bool) (*btcjson.GetTxOutResult, error) {
+	return v.client.GetTxOut(txid, vout, includeMempool)
+}
+
+// IsTaprootOutput checks if a transaction output is a Taproot output.
+func (v *Validator) IsTaprootOutput(txOut *btcjson.GetTxOutResult) bool {
+	if txOut == nil {
+		return false
+	}
+	// Taproot outputs start with OP_1 (0x51) followed by a 32-byte key
+	script, err := hex.DecodeString(txOut.ScriptPubKey.Hex)
+	if err != nil {
+		return false
+	}
+	return len(script) == 34 && script[0] == 0x51
+}
+
+// GetTaprootPubKey extracts the Taproot public key from a transaction output.
+func (v *Validator) GetTaprootPubKey(txOut *btcjson.GetTxOutResult) (string, error) {
+	if !v.IsTaprootOutput(txOut) {
+		return "", fmt.Errorf("not a Taproot output")
+	}
+	script, err := hex.DecodeString(txOut.ScriptPubKey.Hex)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode script: %v", err)
+	}
+	// The Taproot key is the 32 bytes after OP_1
+	return hex.EncodeToString(script[1:33]), nil
 }

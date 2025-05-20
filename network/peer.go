@@ -8,7 +8,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -16,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/shaibearary/utxo_chat/message"
 )
 
@@ -78,7 +78,6 @@ func (p *Peer) readMessages() {
 	reader := bufio.NewReader(p.conn)
 
 	for {
-
 		select {
 		case <-p.disconnect:
 			log.Printf("Disconnect signal received for peer %s", p.addr)
@@ -116,21 +115,21 @@ func (p *Peer) readMessages() {
 		switch msgType {
 		case MessageTypeInv:
 			// Pass the reader to the handler function
-			if err := p.handleInvMessage(); err != nil {
+			if err := p.handleInvMessage(reader); err != nil {
 				log.Printf("Error handling inv message from peer %s: %v", p.addr, err)
 				return
 			}
 
 		case MessageTypeGetData:
 			// Pass the reader to the handler function
-			if err := p.handleGetDataMessage(); err != nil {
+			if err := p.handleGetDataMessage(reader); err != nil {
 				log.Printf("Error handling getdata message from peer %s: %v", p.addr, err)
 				return
 			}
 
 		case MessageTypeData:
 			// Pass the reader to the handler function
-			if err := p.handleDataMessage(); err != nil {
+			if err := p.handleDataMessage(reader); err != nil {
 				log.Printf("Error handling data message from peer %s: %v", p.addr, err)
 				return
 			}
@@ -143,10 +142,10 @@ func (p *Peer) readMessages() {
 }
 
 // handleInvMessage processes an inventory message from a peer
-func (p *Peer) handleInvMessage() error {
+func (p *Peer) handleInvMessage(reader *bufio.Reader) error {
 	// Read count of inventory items
 	countBytes := make([]byte, 2)
-	if _, err := io.ReadFull(p.conn, countBytes); err != nil {
+	if _, err := io.ReadFull(reader, countBytes); err != nil {
 		return fmt.Errorf("failed to read inv count: %v", err)
 	}
 
@@ -155,7 +154,7 @@ func (p *Peer) handleInvMessage() error {
 	// Read each inventory item (txid + vout)
 	for i := uint16(0); i < count; i++ {
 		outpointBytes := make([]byte, message.OutpointSize)
-		if _, err := io.ReadFull(p.conn, outpointBytes); err != nil {
+		if _, err := io.ReadFull(reader, outpointBytes); err != nil {
 			return fmt.Errorf("failed to read outpoint %d: %v", i, err)
 		}
 		var outpoint message.Outpoint
@@ -179,10 +178,10 @@ func (p *Peer) handleInvMessage() error {
 }
 
 // handleGetDataMessage processes a get data message from a peer
-func (p *Peer) handleGetDataMessage() error {
+func (p *Peer) handleGetDataMessage(reader *bufio.Reader) error {
 	// Read outpoint
 	outpointBytes := make([]byte, message.OutpointSize)
-	if _, err := io.ReadFull(p.conn, outpointBytes); err != nil {
+	if _, err := io.ReadFull(reader, outpointBytes); err != nil {
 		return fmt.Errorf("failed to read outpoint: %v", err)
 	}
 
@@ -207,25 +206,57 @@ func (p *Peer) handleGetDataMessage() error {
 }
 
 // handleDataMessage processes a data message from a peer
-func (p *Peer) handleDataMessage() error {
-	// Read message length
-	lengthBytes := make([]byte, 4)
-	if _, err := io.ReadFull(p.conn, lengthBytes); err != nil {
-		return fmt.Errorf("failed to read message length: %v", err)
+func (p *Peer) handleDataMessage(reader *bufio.Reader) error {
+	// Read the outpoint (36 bytes)
+	outpointBuf := make([]byte, message.OutpointSize)
+	if _, err := io.ReadFull(reader, outpointBuf); err != nil {
+		return fmt.Errorf("failed to read outpoint: %v", err)
 	}
 
-	length := binary.LittleEndian.Uint32(lengthBytes)
+	// Read the signature (64 bytes)
+	signatureBuf := make([]byte, message.SignatureSize)
+	if _, err := io.ReadFull(reader, signatureBuf); err != nil {
+		return fmt.Errorf("failed to read signature: %v", err)
+	}
+
+	// Read the length (2 bytes)
+	lengthBuf := make([]byte, message.LengthSize)
+	if _, err := io.ReadFull(reader, lengthBuf); err != nil {
+		return fmt.Errorf("failed to read length: %v", err)
+	}
+
+	// Extract payload length
+	payloadLength := binary.LittleEndian.Uint16(lengthBuf)
 
 	// Check for reasonable size
-	if length == 0 || length > message.MaxMessageSize {
-		return fmt.Errorf("invalid message length: %d", length)
+	if payloadLength > message.MaxPayloadSize {
+		return fmt.Errorf("invalid payload length: %d", payloadLength)
 	}
 
-	// Read the message data
-	msgData := make([]byte, length)
-	if _, err := io.ReadFull(p.conn, msgData); err != nil {
-		return fmt.Errorf("failed to read message data: %v", err)
+	// Allocate buffer for the entire message
+	totalSize := message.HeaderSize + int(payloadLength)
+	msgData := make([]byte, totalSize)
+
+	// Copy header components to the buffer
+	copy(msgData[0:message.OutpointSize], outpointBuf)
+	copy(msgData[message.OutpointSize:message.OutpointSize+message.SignatureSize], signatureBuf)
+	copy(msgData[message.OutpointSize+message.SignatureSize:message.HeaderSize], lengthBuf)
+	// Read the payload if there is any
+	// Read the payload directly into the message buffer based on payload length
+	payloadBuf := make([]byte, payloadLength)
+	if payloadLength > 0 {
+		if _, err := io.ReadFull(reader, payloadBuf); err != nil {
+			return fmt.Errorf("failed to read message payload: %v", err)
+		}
+		// Copy payload into the message data buffer
+		copy(msgData[message.HeaderSize:], payloadBuf)
 	}
+
+	// Log the message parts for debugging
+	var outpoint message.Outpoint
+	copy(outpoint[:], outpointBuf)
+	log.Printf("Received message - Outpoint: %x:%d, Payload length: %d bytes",
+		outpointBuf[:32], binary.LittleEndian.Uint32(outpointBuf[32:36]), payloadLength)
 
 	// Deserialize the message
 	msg, err := message.Deserialize(msgData)
@@ -235,7 +266,7 @@ func (p *Peer) handleDataMessage() error {
 
 	// Validate the message using our validator
 	// Get public key from payload (this would depend on your message format)
-	pubKeyHex, err := extractPubKey(msg.Payload)
+	pubKeyHex, err := p.extractPubKey(outpoint[:])
 	if err != nil {
 		return fmt.Errorf("failed to extract public key: %v", err)
 	}
@@ -260,15 +291,44 @@ func (p *Peer) handleDataMessage() error {
 
 // Helper function to extract public key from payload
 // The format will depend on your specific implementation
-func extractPubKey(payload []byte) (string, error) {
-	// TODO: Implement actual public key extraction based on your message format
-	// This is just a placeholder
-	if len(payload) < 33 {
-		return "", fmt.Errorf("payload too short to contain public key")
+func (p *Peer) extractPubKey(outpoint []byte) (string, error) {
+	// Extract the txid and vout from the outpoint
+	txid, _ := message.Outpoint(outpoint).ToTxidIdx()
+
+	// Get the UTXO from Bitcoin node
+	// Convert txid to chainhash.Hash (reversing the bytes)
+	var hash chainhash.Hash
+	for i := 0; i < 32; i++ {
+		hash[i] = txid[31-i]
 	}
 
-	// Assuming the first part of the payload contains the public key
-	return hex.EncodeToString(payload[:33]), nil
+	// Convert vout bytes to uint32 (little-endian)
+	voutValue := binary.LittleEndian.Uint32(outpoint[32:36])
+
+	log.Printf("Extracting public key for txid: %s, vout: %d", hash.String(), voutValue)
+
+	txOut, err := p.manager.validator.GetTxOut(&hash, voutValue, false)
+	if err != nil {
+		return "", fmt.Errorf("failed to get UTXO info: %v", err)
+	}
+
+	// Check if the UTXO exists
+	if txOut == nil {
+		return "", fmt.Errorf("outpoint does not exist or is spent")
+	}
+
+	// Check if the UTXO is a taproot output
+	if !p.manager.validator.IsTaprootOutput(txOut) {
+		return "", fmt.Errorf("outpoint is not a taproot output")
+	}
+
+	// Extract the taproot pubkey from the UTXO
+	pubKeyHex, err := p.manager.validator.GetTaprootPubKey(txOut)
+	if err != nil {
+		return "", fmt.Errorf("failed to extract taproot pubkey: %v", err)
+	}
+
+	return pubKeyHex, nil
 }
 
 // requestData sends a getdata message to the peer
