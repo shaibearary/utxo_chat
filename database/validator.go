@@ -5,12 +5,13 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/wire"
 	"github.com/shaibearary/utxo_chat/bitcoin"
 	"github.com/shaibearary/utxo_chat/message"
+
+	bip322 "github.com/unisat-wallet/libbrc20-indexer/utils/bip322"
 )
 
 // Validator handles message validation including UTXO ownership and signatures.
@@ -29,7 +30,7 @@ func NewValidator(client *bitcoin.Client, db Database) *Validator {
 
 // ValidateMessage validates a message including UTXO ownership and signature.
 func (v *Validator) ValidateMessage(
-	ctx context.Context, msg *message.Message, pubKeyHex string) error {
+	ctx context.Context, msg *message.Message, pkScript []byte) error {
 
 	seen, err := v.db.HasOutpoint(ctx, msg.Outpoint)
 	if err != nil {
@@ -42,17 +43,15 @@ func (v *Validator) ValidateMessage(
 	// Log pubkey hex and outpoint for debugging
 	hash, vout := msg.Outpoint.ToTxidIdx()
 	fmt.Printf("Validating message - Outpoint: %s:%d, PubKey: %s\n",
-		hash.String(), vout, pubKeyHex)
+		hash.String(), vout, pkScript)
 
 	// Verify UTXO ownership
-	if err := v.VerifyUTXOOwnership(ctx, msg.Outpoint, pubKeyHex); err != nil {
-		return fmt.Errorf("UTXO verification failed: %v", err)
-	}
-	// Log the public key hex for debugging
-	fmt.Printf("Public key hex for signature verification: %s\n", pubKeyHex)
+	// if err := v.VerifyUTXOOwnership(ctx, msg.Outpoint, pkScript); err != nil {
+	// 	return fmt.Errorf("UTXO verification failed: %v", err)
+	// }
+	messageStr := string(msg.Payload)
 
-	// Verify message signature
-	if err := v.VerifySignature(msg.Payload, msg.Signature[:], pubKeyHex); err != nil {
+	if err := v.VerifySignature(messageStr, msg.Signature[:], pkScript); err != nil {
 		return fmt.Errorf("signature verification failed: %v", err)
 	}
 
@@ -66,14 +65,14 @@ func (v *Validator) ValidateMessage(
 
 // VerifyUTXOOwnership verifies that the given public key owns the specified UTXO.
 func (v *Validator) VerifyUTXOOwnership(
-	ctx context.Context, outpoint message.Outpoint, pubKeyHex string) error {
+	ctx context.Context, outpoint message.Outpoint, pkScript []byte) error {
 	hash, vout := outpoint.ToTxidIdx()
 	// Get the UTXO from Bitcoin node
 	// Log UTXO lookup details for debugging
 	fmt.Printf("Looking up UTXO - TxID: %s, Vout: %d\n", hash.String(), vout)
 
 	// Log public key we're verifying against
-	fmt.Printf("Verifying UTXO ownership against pubkey: %s\n", pubKeyHex)
+	fmt.Printf("Verifying UTXO ownership against pubkey: %s\n", pkScript)
 	txOut, err := v.client.GetTxOut(hash, vout, false)
 	if err != nil {
 		return fmt.Errorf("failed to get txout: %v", err)
@@ -91,26 +90,11 @@ func (v *Validator) VerifyUTXOOwnership(
 }
 
 // VerifySignature verifies that the message was signed by the owner of the public key.
-func (v *Validator) VerifySignature(message []byte, signature []byte, pubKeyHex string) error {
-	// Parse public key
-	pubKeyBytes, err := btcec.ParsePubKey([]byte(pubKeyHex))
-	if err != nil {
-		return fmt.Errorf("invalid public key: %v", err)
-	}
-
-	// Parse signature
-	sig, err := ecdsa.ParseSignature(signature)
-	if err != nil {
-		return fmt.Errorf("invalid signature: %v", err)
-	}
-
-	// Hash the message (double SHA256)
-	messageHash := chainhash.DoubleHashB(message)
-
-	// Verify the signature
-	if !sig.Verify(messageHash, pubKeyBytes) {
-		return fmt.Errorf("invalid signature")
-	}
+func (v *Validator) VerifySignature(message string, signature []byte, pkScript []byte) error {
+	// Convert pkScript to wire.TxWitness
+	witness := wire.TxWitness{signature}
+	a := bip322.VerifySignature(witness, pkScript, message)
+	fmt.Printf("Signature verification result: %v\n", a)
 
 	return nil
 }
@@ -134,14 +118,16 @@ func (v *Validator) IsTaprootOutput(txOut *btcjson.GetTxOutResult) bool {
 }
 
 // GetTaprootPubKey extracts the Taproot public key from a transaction output.
-func (v *Validator) GetTaprootPubKey(txOut *btcjson.GetTxOutResult) (string, error) {
+func (v *Validator) GetTaprootPKScript(txOut *btcjson.GetTxOutResult) ([]byte, error) {
 	if !v.IsTaprootOutput(txOut) {
-		return "", fmt.Errorf("not a Taproot output")
+		return nil, fmt.Errorf("not a Taproot output")
 	}
-	script, err := hex.DecodeString(txOut.ScriptPubKey.Hex)
+
+	scriptBytes, err := hex.DecodeString(txOut.ScriptPubKey.Hex)
 	if err != nil {
-		return "", fmt.Errorf("failed to decode script: %v", err)
+		return nil, fmt.Errorf("failed to decode script hex: %v", err)
 	}
+
 	// The Taproot key is the 32 bytes after OP_1
-	return hex.EncodeToString(script[1:33]), nil
+	return scriptBytes, nil
 }

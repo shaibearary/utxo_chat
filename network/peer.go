@@ -265,13 +265,13 @@ func (p *Peer) handleDataMessage(reader *bufio.Reader) error {
 
 	// Validate the message using our validator
 	// Get public key from payload (this would depend on your message format)
-	pubKeyHex, err := p.extractPubKey(outpoint[:])
+	pkScript, err := p.extractPKScript(outpoint[:])
 	if err != nil {
 		return fmt.Errorf("failed to extract public key: %v", err)
 	}
 
 	// Use context from peer
-	if err := p.manager.validator.ValidateMessage(p.ctx, msg, pubKeyHex); err != nil {
+	if err := p.manager.validator.ValidateMessage(p.ctx, msg, pkScript); err != nil {
 		return fmt.Errorf("invalid message: %v", err)
 	}
 
@@ -290,7 +290,7 @@ func (p *Peer) handleDataMessage(reader *bufio.Reader) error {
 
 // Helper function to extract public key from payload
 // The format will depend on your specific implementation
-func (p *Peer) extractPubKey(outpoint []byte) (string, error) {
+func (p *Peer) extractPKScript(outpoint []byte) ([]byte, error) {
 	// Extract the txid and vout from the outpoint
 	txid, _ := message.Outpoint(outpoint).ToTxidIdx()
 
@@ -302,26 +302,26 @@ func (p *Peer) extractPubKey(outpoint []byte) (string, error) {
 
 	txOut, err := p.manager.validator.GetTxOut(txid, voutValue, false)
 	if err != nil {
-		return "", fmt.Errorf("failed to get UTXO info: %v", err)
+		return nil, fmt.Errorf("failed to get UTXO info: %v", err)
 	}
 
 	// Check if the UTXO exists
 	if txOut == nil {
-		return "", fmt.Errorf("outpoint does not exist or is spent")
+		return nil, fmt.Errorf("outpoint does not exist or is spent")
 	}
 
 	// Check if the UTXO is a taproot output
 	if !p.manager.validator.IsTaprootOutput(txOut) {
-		return "", fmt.Errorf("outpoint is not a taproot output")
+		return nil, fmt.Errorf("outpoint is not a taproot output")
 	}
 
 	// Extract the taproot pubkey from the UTXO
-	pubKeyHex, err := p.manager.validator.GetTaprootPubKey(txOut)
+	pkScript, err := p.manager.validator.GetTaprootPKScript(txOut)
 	if err != nil {
-		return "", fmt.Errorf("failed to extract taproot pubkey: %v", err)
+		return nil, fmt.Errorf("failed to extract taproot pubkey: %v", err)
 	}
 
-	return pubKeyHex, nil
+	return pkScript, nil
 }
 
 // requestData sends a getdata message to the peer
