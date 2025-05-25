@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/shaibearary/utxo_chat/message"
 )
 
@@ -297,17 +296,11 @@ func (p *Peer) extractPubKey(outpoint []byte) (string, error) {
 
 	// Get the UTXO from Bitcoin node
 	// Convert txid to chainhash.Hash (reversing the bytes)
-	var hash chainhash.Hash
-	for i := 0; i < 32; i++ {
-		hash[i] = txid[31-i]
-	}
 
 	// Convert vout bytes to uint32 (little-endian)
 	voutValue := binary.LittleEndian.Uint32(outpoint[32:36])
 
-	log.Printf("Extracting public key for txid: %s, vout: %d", hash.String(), voutValue)
-
-	txOut, err := p.manager.validator.GetTxOut(&hash, voutValue, false)
+	txOut, err := p.manager.validator.GetTxOut(txid, voutValue, false)
 	if err != nil {
 		return "", fmt.Errorf("failed to get UTXO info: %v", err)
 	}

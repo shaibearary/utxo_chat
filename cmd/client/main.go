@@ -24,14 +24,16 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"net"
 	"strings"
+
+	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	bip322 "github.com/unisat-wallet/libbrc20-indexer/utils/bip322"
 )
 
 // Outpoint represents a Bitcoin transaction output
@@ -51,6 +53,22 @@ const (
 	signatureSize = 64
 )
 
+func GetSha256(data []byte) (hash []byte) {
+	sha := sha256.New()
+	sha.Write(data[:])
+	hash = sha.Sum(nil)
+	return
+}
+func GetTagSha256(data []byte) (hash []byte) {
+	tag := []byte("BIP0322-signed-message")
+	hashTag := GetSha256(tag)
+	var msg []byte
+	msg = append(msg, hashTag...)
+	msg = append(msg, hashTag...)
+	msg = append(msg, data...)
+	return GetSha256(msg)
+}
+
 // SignMessageWithTaproot signs a message using BIP322
 func SignMessageWithTaproot(descriptor string, outpoint Outpoint, message string) ([]byte, error) {
 	// Parse descriptor
@@ -59,7 +77,10 @@ func SignMessageWithTaproot(descriptor string, outpoint Outpoint, message string
 	parts := strings.Split(desc, "/")
 
 	// Get base key
+
 	tprv := parts[0]
+	log.Printf("Descriptor parts: %v", parts)
+	log.Printf("Full descriptor: %s", desc)
 
 	// Parse the extended private key
 	extKey, err := hdkeychain.NewKeyFromString(tprv)
@@ -74,6 +95,8 @@ func SignMessageWithTaproot(descriptor string, outpoint Outpoint, message string
 
 	// Derive through path
 	key := extKey
+	log.Printf("Derivation path parts: %v", parts)
+	log.Printf("Number of path parts: %d", len(parts))
 	for _, part := range parts[1 : len(parts)-1] {
 		var index uint32
 		if strings.HasSuffix(part, "h") {
@@ -88,6 +111,7 @@ func SignMessageWithTaproot(descriptor string, outpoint Outpoint, message string
 		if err != nil {
 			return nil, fmt.Errorf("derivation error: %v", err)
 		}
+		log.Printf("Derived key at path %s: %s", part, key.String())
 	}
 
 	// Get the private key
@@ -97,62 +121,100 @@ func SignMessageWithTaproot(descriptor string, outpoint Outpoint, message string
 	}
 
 	// Get the public key
-	pubKey := privKey.PubKey()
-
-	// Create the taproot script
-	pkScript, err := txscript.PayToTaprootScript(pubKey)
+	pubKey, err := key.ECPubKey()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create taproot script: %v", err)
+		return nil, fmt.Errorf("derivation error: %v", err)
 	}
+	log.Printf("Derived public key: %x", pubKey.SerializeCompressed())
 
+	schnorrPubKey, err := schnorr.ParsePubKey(schnorr.SerializePubKey(pubKey))
+	if err != nil {
+
+		return nil, fmt.Errorf("Error converting to Schnorr pubkey: %v\n", err)
+	}
+	// Create Taproot output key
+	taprootKey := txscript.ComputeTaprootOutputKey(schnorrPubKey, nil)
+	taprootScript, err := txscript.PayToTaprootScript(taprootKey)
+	if err != nil {
+
+		return nil, fmt.Errorf("Error creating Taproot script: %v\n", err)
+	}
+	// Create the taproot script
+
+	log.Printf("Generated pkScript: %x", taprootScript)
 	// Step 1: Create the "to_spend" transaction (virtual tx1)
 	toSpend := wire.NewMsgTx(0)
-	prevOut := wire.NewOutPoint(&chainhash.Hash{}, math.MaxUint32)
-	txIn := wire.NewTxIn(prevOut, nil, nil)
-	txIn.Sequence = 0
-	toSpend.AddTxIn(txIn)
-
-	// Add scriptSig with message hash
-	tag := []byte("BIP0322-signed-message")
-	messageBytes := []byte(message)
-	h := sha256.New()
-	h.Write(tag)
-	h.Write(tag)
-	h.Write(messageBytes)
-	messageHash := h.Sum(nil)
-
+	messageHash := GetTagSha256([]byte(message))
 	builder := txscript.NewScriptBuilder()
 	builder.AddOp(txscript.OP_0)
-	builder.AddData(messageHash[:])
-	scriptSig, _ := builder.Script()
-	toSpend.TxIn[0].SignatureScript = scriptSig
+	builder.AddData(messageHash)
+	scriptSig, err := builder.Script()
+	if err != nil {
+		return nil, err
+	}
 
-	// Add output with the taproot script
-	toSpend.AddTxOut(wire.NewTxOut(0, pkScript))
+	prevOutHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000000")
 
-	// Step 2: Create the "to_sign" transaction (virtual tx2)
-	toSign := wire.NewMsgTx(0)
-	spendHash := toSpend.TxHash()
-	txIn = wire.NewTxIn(wire.NewOutPoint(&spendHash, 0), nil, nil)
+	prevOut := wire.NewOutPoint(prevOutHash, wire.MaxPrevOutIndex)
+	txIn := wire.NewTxIn(prevOut, scriptSig, nil)
 	txIn.Sequence = 0
-	toSign.AddTxIn(txIn)
 
-	// Add OP_RETURN output
-	builder = txscript.NewScriptBuilder()
-	builder.AddOp(txscript.OP_RETURN)
-	opReturnScript, _ := builder.Script()
-	toSign.AddTxOut(wire.NewTxOut(0, opReturnScript))
+	toSpend.AddTxIn(txIn)
+	toSpend.AddTxOut(wire.NewTxOut(0, taprootScript))
+
+	toSign := wire.NewMsgTx(0)
+	hash := toSpend.TxHash()
+
+	prevOutSpend := wire.NewOutPoint((*chainhash.Hash)(hash.CloneBytes()), 0)
+
+	txSignIn := wire.NewTxIn(prevOutSpend, nil, nil)
+	txSignIn.Sequence = 0
+	toSign.AddTxIn(txSignIn)
+
+	builderPk := txscript.NewScriptBuilder()
+	builderPk.AddOp(txscript.OP_RETURN)
+	scriptPk, err := builderPk.Script()
+	if err != nil {
+		return nil, err
+	}
+	toSign.AddTxOut(wire.NewTxOut(0, scriptPk))
 
 	// Step 3: Sign the transaction
-	prevFetcher := txscript.NewCannedPrevOutputFetcher(pkScript, 0)
+	prevFetcher := txscript.NewCannedPrevOutputFetcher(taprootScript, 0)
 	sigHashes := txscript.NewTxSigHashes(toSign, prevFetcher)
 
 	witness, err := txscript.TaprootWitnessSignature(
-		toSign, sigHashes, 0, 0, pkScript,
+		toSign, sigHashes, 0, 0, taprootScript,
 		txscript.SigHashDefault, privKey,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create witness signature: %v", err)
+	}
+
+	// Verify the signature immediately
+	toSign.TxIn[0].Witness = witness
+	vm, err := txscript.NewEngine(
+		taprootScript,
+		toSign,
+		0,
+		txscript.StandardVerifyFlags,
+		nil,
+		sigHashes,
+		0,
+		prevFetcher,
+	)
+	if err != nil {
+		log.Printf("Script engine creation error: %v", err)
+		return nil, fmt.Errorf("failed to create script engine: %v", err)
+	}
+	if err := vm.Execute(); err != nil {
+		log.Printf("Script execution error: %v", err)
+		log.Printf("Transaction details:")
+		log.Printf("  toSign: %+v", toSign)
+		log.Printf("  witness: %x", witness)
+		log.Printf("  pkScript: %x", taprootScript)
+		log.Printf("  messageHash: %x", messageHash)
+		return nil, fmt.Errorf("signature verification failed: %v", err)
 	}
 
 	// Create the final message structure
@@ -185,13 +247,17 @@ func SignMessageWithTaproot(descriptor string, outpoint Outpoint, message string
 	log.Printf("  Length field (%d bytes): %x (decimal: %d)", 2, msg[outpointSize+signatureSize:outpointSize+signatureSize+2], length)
 	log.Printf("  Payload (%d bytes): %s", len(message), message)
 	log.Printf("Total message size: %d bytes", len(msg))
-
+	log.Printf("Witness: %x", witness)
+	log.Printf("PkScript: %x", taprootScript)
+	log.Printf("Message: %s", message)
+	verifyResult := bip322.VerifySignature(witness, taprootScript, message)
+	log.Printf("Signature verification result: %v", verifyResult)
 	return msg, nil
 }
 
 func main() {
 	// Command line flags
-	descriptor := flag.String("descriptor", "tprv8ZgxMBicQKsPd9tkUFdaFQ3HSViR6rSQD75YToUJusnMd64hw2rwecHJohLZswiYa3mXEErjfkk79fo8jRbVeYzuHtTRB214iZz3s9kJYxM/84h/1h/0h/1/*)#zshpdrr0", "Taproot descriptor")
+	descriptor := flag.String("descriptor", "tr(tprv8ZgxMBicQKsPd9tkUFdaFQ3HSViR6rSQD75YToUJusnMd64hw2rwecHJohLZswiYa3mXEErjfkk79fo8jRbVeYzuHtTRB214iZz3s9kJYxM/86h/1h/0h/0/0/)#svs6tee0", "Taproot descriptor")
 	txid := flag.String("txid", "f63e8bae313e2f88a086b6927a81fe25ec43da550db8d714575abd1c22422021", "Transaction ID")
 	vout := flag.Uint("vout", 1, "Output index")
 	message := flag.String("message", "Hello, UTXO Chat!", "Message to sign")
@@ -240,6 +306,7 @@ func main() {
 	fmt.Printf("Payload: %s\n", fullMsg[103:])
 
 	// Wait for server response
+
 	fmt.Println("Waiting for server response...")
 	response := make([]byte, 1024)
 	n, err := conn.Read(response)

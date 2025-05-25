@@ -39,11 +39,17 @@ func (v *Validator) ValidateMessage(
 	if seen {
 		return fmt.Errorf("outpoint already seen")
 	}
+	// Log pubkey hex and outpoint for debugging
+	hash, vout := msg.Outpoint.ToTxidIdx()
+	fmt.Printf("Validating message - Outpoint: %s:%d, PubKey: %s\n",
+		hash.String(), vout, pubKeyHex)
 
 	// Verify UTXO ownership
 	if err := v.VerifyUTXOOwnership(ctx, msg.Outpoint, pubKeyHex); err != nil {
 		return fmt.Errorf("UTXO verification failed: %v", err)
 	}
+	// Log the public key hex for debugging
+	fmt.Printf("Public key hex for signature verification: %s\n", pubKeyHex)
 
 	// Verify message signature
 	if err := v.VerifySignature(msg.Payload, msg.Signature[:], pubKeyHex); err != nil {
@@ -63,6 +69,11 @@ func (v *Validator) VerifyUTXOOwnership(
 	ctx context.Context, outpoint message.Outpoint, pubKeyHex string) error {
 	hash, vout := outpoint.ToTxidIdx()
 	// Get the UTXO from Bitcoin node
+	// Log UTXO lookup details for debugging
+	fmt.Printf("Looking up UTXO - TxID: %s, Vout: %d\n", hash.String(), vout)
+
+	// Log public key we're verifying against
+	fmt.Printf("Verifying UTXO ownership against pubkey: %s\n", pubKeyHex)
 	txOut, err := v.client.GetTxOut(hash, vout, false)
 	if err != nil {
 		return fmt.Errorf("failed to get txout: %v", err)

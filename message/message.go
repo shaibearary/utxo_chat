@@ -41,8 +41,14 @@ func (op Outpoint) ToTxidIdx() (*chainhash.Hash, uint32) {
 	// ignoring the returned error here since we are giving it 32 bytes from a
 	// fixed 36 byte array, and the only possible error is due to incorrect
 	// array length
-	hash, _ := chainhash.NewHash(op[:32])
-	return hash, binary.BigEndian.Uint32(op[32:36])
+	// Create a reversed copy of the txid bytes for chainhash.NewHash
+	// since Bitcoin displays txids in big-endian but internally uses little-endian
+	reversedTxid := make([]byte, 32)
+	for i := 0; i < 32; i++ {
+		reversedTxid[i] = op[31-i]
+	}
+	hash, _ := chainhash.NewHash(reversedTxid)
+	return hash, binary.LittleEndian.Uint32(op[32:36])
 }
 
 func (op Outpoint) ToString() string {
