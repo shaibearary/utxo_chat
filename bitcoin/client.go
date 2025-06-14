@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/btcsuite/btcd/btcjson"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/rpcclient"
 )
 
@@ -102,4 +103,25 @@ func (c *Client) GetBlockchainInfo(ctx context.Context) (*BlockchainInfo, error)
 // Close shuts down the client.
 func (c *Client) Close() {
 	c.Shutdown()
+}
+
+// GetBlockHash gets the block hash for a given height
+func (c *Client) GetBlockHash(ctx context.Context, height int32) (*chainhash.Hash, error) {
+	return c.Client.GetBlockHash(int64(height))
+}
+
+// GetBlock gets a block by hash and returns the raw block data
+func (c *Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*btcjson.GetBlockVerboseResult, error) {
+	// Get verbose block info which includes transaction details
+	return c.Client.GetBlockVerbose(blockHash)
+}
+
+// GetBlockVerboseTx gets a block with full transaction details (verbosity level 2)
+func (c *Client) GetBlockVerboseTx(blockHash *chainhash.Hash) (*btcjson.GetBlockVerboseTxResult, error) {
+	return c.Client.GetBlockVerboseTx(blockHash)
+}
+
+// GetRawTransaction gets the raw transaction data for a given transaction hash
+func (c *Client) GetRawTransaction(ctx context.Context, txHash *chainhash.Hash) (*btcjson.TxRawResult, error) {
+	return c.Client.GetRawTransactionVerbose(txHash)
 }

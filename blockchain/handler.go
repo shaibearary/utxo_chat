@@ -10,8 +10,11 @@ import (
 	"log"
 	"time"
 
+	"github.com/btcsuite/btcd/btcjson"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/shaibearary/utxo_chat/bitcoin"
 	"github.com/shaibearary/utxo_chat/database"
+	"github.com/shaibearary/utxo_chat/message"
 )
 
 // Handler is responsible for monitoring the blockchain and handling new blocks
@@ -99,7 +102,7 @@ func (h *Handler) processBlocks() {
 		h.config.NotificationsEnabled, h.config.MaxReorgDepth, h.config.ScanFullBlocks)
 
 	// Set up polling interval if notifications are not enabled
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	lastKnownHeight := int32(0)
@@ -143,5 +146,140 @@ func (h *Handler) processBlocks() {
 // handleNewBlock processes a new block
 func (h *Handler) handleNewBlock(height int32) error {
 
+	// Get the block hash for this height
+	blockHash, err := h.client.GetBlockHash(h.ctx, height)
+	if err != nil {
+		return fmt.Errorf("failed to get block hash for height %d: %v", height, err)
+	}
+
+	// Get the block data
+	block, err := h.client.GetBlock(h.ctx, blockHash)
+	if err != nil {
+		return fmt.Errorf("failed to get block %s: %v", blockHash.String(), err)
+	}
+
+	// Extract all spent outpoints from the block
+	spentOutpoints, err := h.extractSpentOutpoints(block)
+	if err != nil {
+		return fmt.Errorf("failed to extract spent outpoints from block %s: %v", blockHash.String(), err)
+	}
+
+	if len(spentOutpoints) > 0 {
+		log.Printf("Found %d spent outpoints in block %s", len(spentOutpoints), blockHash.String())
+
+		// Remove spent outpoints from the database
+		if err := h.db.RemoveOutpoints(h.ctx, spentOutpoints); err != nil {
+			return fmt.Errorf("failed to remove spent outpoints from database: %v", err)
+		}
+
+		log.Printf("Removed %d spent outpoints from UTXOchat database", len(spentOutpoints))
+	}
+
 	return nil
+}
+
+// extractSpentOutpoints extracts all outpoints that are spent in the given block
+func (h *Handler) extractSpentOutpoints(block *btcjson.GetBlockVerboseResult) ([]message.Outpoint, error) {
+	var spentOutpoints []message.Outpoint
+
+	// Get the block with transaction details
+	blockHash, err := chainhash.NewHashFromStr(block.Hash)
+	if err != nil {
+		return nil, fmt.Errorf("invalid block hash: %v", err)
+	}
+
+	// Get verbose block data with transaction details (verbosity level 2)
+	blockVerbose, err := h.client.GetBlockVerboseTx(blockHash)
+	if err != nil {
+		log.Printf("Failed to get block verbose data, falling back to individual tx calls: %v", err)
+		return h.extractSpentOutpointsFromTxIDs(block)
+	}
+
+	// Process each transaction in the verbose block
+	for _, tx := range blockVerbose.Tx {
+		// Process each input in the transaction
+		for _, input := range tx.Vin {
+			// Skip coinbase transactions (they don't spend existing UTXOs)
+			if input.Coinbase != "" {
+				continue
+			}
+
+			// Convert the spent outpoint to our format
+			spentOutpoint, err := h.convertToOutpoint(input.Txid, input.Vout)
+			if err != nil {
+				log.Printf("Failed to convert outpoint %s:%d: %v", input.Txid, input.Vout, err)
+				continue
+			}
+
+			spentOutpoints = append(spentOutpoints, spentOutpoint)
+		}
+	}
+
+	return spentOutpoints, nil
+}
+
+// extractSpentOutpointsFromTxIDs is a fallback method using individual transaction calls
+func (h *Handler) extractSpentOutpointsFromTxIDs(block *btcjson.GetBlockVerboseResult) ([]message.Outpoint, error) {
+	var spentOutpoints []message.Outpoint
+
+	log.Printf("Using fallback method for block %s (requires txindex=1)", block.Hash)
+
+	// Process each transaction in the block
+	for _, txid := range block.Tx {
+		// Parse the transaction ID
+		txHash, err := chainhash.NewHashFromStr(txid)
+		if err != nil {
+			log.Printf("Invalid transaction ID %s: %v", txid, err)
+			continue
+		}
+
+		// Get the raw transaction to access its inputs
+		tx, err := h.client.GetRawTransaction(h.ctx, txHash)
+		if err != nil {
+			log.Printf("Failed to get raw transaction %s: %v (hint: enable txindex=1 in bitcoin.conf)", txid, err)
+			continue
+		}
+
+		// Process each input in the transaction
+		for _, input := range tx.Vin {
+			// Skip coinbase transactions (they don't spend existing UTXOs)
+			if input.Coinbase != "" {
+				continue
+			}
+
+			// Convert the spent outpoint to our format
+			spentOutpoint, err := h.convertToOutpoint(input.Txid, input.Vout)
+			if err != nil {
+				log.Printf("Failed to convert outpoint %s:%d: %v", input.Txid, input.Vout, err)
+				continue
+			}
+
+			spentOutpoints = append(spentOutpoints, spentOutpoint)
+		}
+	}
+
+	return spentOutpoints, nil
+}
+
+// convertToOutpoint converts a txid string and vout to our Outpoint format
+func (h *Handler) convertToOutpoint(txidStr string, vout uint32) (message.Outpoint, error) {
+	var outpoint message.Outpoint
+
+	// Parse the transaction hash
+	txHash, err := chainhash.NewHashFromStr(txidStr)
+	if err != nil {
+		return outpoint, fmt.Errorf("invalid txid: %v", err)
+	}
+
+	// Copy the transaction hash (in little-endian format for our Outpoint)
+	// The chainhash.Hash is already in little-endian format internally
+	copy(outpoint[:32], txHash[:])
+
+	// Set the vout (output index) in little-endian format
+	outpoint[32] = byte(vout)
+	outpoint[33] = byte(vout >> 8)
+	outpoint[34] = byte(vout >> 16)
+	outpoint[35] = byte(vout >> 24)
+
+	return outpoint, nil
 }

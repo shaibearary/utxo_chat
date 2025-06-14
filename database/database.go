@@ -17,6 +17,12 @@ type Database interface {
 	// AddOutpoint adds an outpoint to the database
 	AddOutpoint(ctx context.Context, outpoint message.Outpoint) error
 
+	// RemoveOutpoint removes an outpoint from the database
+	RemoveOutpoint(ctx context.Context, outpoint message.Outpoint) error
+
+	// RemoveOutpoints removes multiple outpoints from the database
+	RemoveOutpoints(ctx context.Context, outpoints []message.Outpoint) error
+
 	// AddMessage adds a message to the database
 	AddMessage(ctx context.Context, outpoint message.Outpoint, data []byte) error
 
