@@ -16,10 +16,16 @@ type MemoryDB struct {
 // AddMessage implements Database.
 func (db *MemoryDB) AddMessage(
 	ctx context.Context, outpoint message.Outpoint, data []byte) error {
-	panic("unimplemented")
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	// Store the outpoint in memory
+	db.outpoints[outpoint] = struct{}{}
+	return nil
 }
 
 // GetMessage implements Database.
+// currently only store outpoints, not message
 func (db *MemoryDB) GetMessage(
 	ctx context.Context, outpoint message.Outpoint) ([]byte, error) {
 	panic("unimplemented")
