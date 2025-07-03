@@ -25,6 +25,10 @@
         "MaxPayloadSize": 65434,
         "MaxMessageSize": 65536
     },
+    "RPC": {
+        "Enabled": true,
+        "ListenAddr": "127.0.0.1:8336"
+    },
     "Debug": {
         "Profile": "",
         "CPUProfile": "",

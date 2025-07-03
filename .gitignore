@@ -49,6 +49,9 @@ tmp/
 config/config.json
 config.json
 
+# Project binaries
+utxochat-cli
+
 cmd/client/examples
 
 scripts/setup_regtest.sh

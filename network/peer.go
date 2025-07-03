@@ -240,52 +240,19 @@ func (p *Peer) handleDataMessage(reader *bufio.Reader) error {
 	copy(msgData[0:message.OutpointSize], outpointBuf)
 	copy(msgData[message.OutpointSize:message.OutpointSize+message.SignatureSize], signatureBuf)
 	copy(msgData[message.OutpointSize+message.SignatureSize:message.HeaderSize], lengthBuf)
+
 	// Read the payload if there is any
-	// Read the payload directly into the message buffer based on payload length
-	payloadBuf := make([]byte, payloadLength)
 	if payloadLength > 0 {
+		payloadBuf := msgData[message.HeaderSize:]
 		if _, err := io.ReadFull(reader, payloadBuf); err != nil {
-			return fmt.Errorf("failed to read message payload: %v", err)
+			return fmt.Errorf("failed to read payload: %v", err)
 		}
-		// Copy payload into the message data buffer
-		copy(msgData[message.HeaderSize:], payloadBuf)
 	}
 
-	// Log the message parts for debugging
-	var outpoint message.Outpoint
-	copy(outpoint[:], outpointBuf)
-	log.Printf("Received message - Outpoint: %x:%d, Payload length: %d bytes",
-		outpointBuf[:32], binary.LittleEndian.Uint32(outpointBuf[32:36]), payloadLength)
+	log.Printf("Received complete message from peer %s (%d bytes)", p.addr, len(msgData))
 
-	// Deserialize the message
-	msg, err := message.Deserialize(msgData)
-	if err != nil {
-		return fmt.Errorf("failed to deserialize message: %v", err)
-	}
-
-	// Validate the message using our validator
-	// Get public key from payload (this would depend on your message format)
-	pkScript, err := p.extractPKScript(outpoint[:])
-	if err != nil {
-		return fmt.Errorf("failed to extract public key: %v", err)
-	}
-
-	// Use context from peer
-	if err := p.manager.validator.ValidateMessage(p.ctx, msg, pkScript); err != nil {
-		return fmt.Errorf("invalid message: %v", err)
-	}
-
-	// If valid, save to database and broadcast to other peers
-
-	// Store original message data in database
-	if err := p.manager.storeMessageInDB(p.ctx, msg.Outpoint, msgData); err != nil {
-		return fmt.Errorf("failed to save message to database: %v", err)
-	}
-
-	// Broadcast to other peers
-	p.manager.broadcastToOtherPeers(p, msg.Outpoint, msgData)
-
-	return nil
+	// Process the message as coming from a peer (full validation)
+	return p.manager.ProcessMessage(p.ctx, msgData, MessageSourcePeer)
 }
 
 // Helper function to extract public key from payload
@@ -343,28 +310,24 @@ func (p *Peer) requestData(outpoint message.Outpoint) error {
 	return err
 }
 
-// sendDataMessage sends a data message to the peer
+// sendInv sends an inventory message for a single outpoint
+func (p *Peer) sendInv(outpoint message.Outpoint) error {
+	// Create inv message (type + count + outpoint)
+	data := make([]byte, 2+message.OutpointSize) // 2 bytes for count, 36 for outpoint
+
+	// Set count to 1
+	binary.LittleEndian.PutUint16(data[0:2], 1)
+
+	// Copy outpoint
+	copy(data[2:], outpoint[:])
+
+	// Send the message
+	return p.SendMessage(MessageTypeInv, data)
+}
+
+// sendDataMessage sends a data message containing the full message data
 func (p *Peer) sendDataMessage(msgData []byte) error {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
-	if !p.connected {
-		return fmt.Errorf("peer disconnected")
-	}
-
-	// Prepare data message header
-	header := make([]byte, 5) // 1 byte type + 4 bytes length
-	header[0] = byte(MessageTypeData)
-	binary.LittleEndian.PutUint32(header[1:], uint32(len(msgData)))
-
-	// Send header
-	if _, err := p.conn.Write(header); err != nil {
-		return err
-	}
-
-	// Send message data
-	_, err := p.conn.Write(msgData)
-	return err
+	return p.SendMessage(MessageTypeData, msgData)
 }
 
 // SendMessage sends a message to the peer

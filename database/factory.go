@@ -28,8 +28,7 @@ func New(cfg Config) (Database, error) {
 	case TypeMemory:
 		return NewMemoryDB(), nil
 	case TypeLevelDB:
-		// TODO: Implement LevelDB
-		return nil, fmt.Errorf("leveldb not implemented yet")
+		return NewLevelDB(cfg.Path)
 	default:
 		return nil, fmt.Errorf("unknown database type: %s", cfg.Type)
 	}

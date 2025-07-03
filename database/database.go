@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"time"
 
 	"github.com/shaibearary/utxo_chat/message"
 )
@@ -28,4 +29,10 @@ type Database interface {
 
 	// GetMessage retrieves a message from the database by outpoint
 	GetMessage(ctx context.Context, outpoint message.Outpoint) ([]byte, error)
+
+	// GetAllOutpoints returns all known outpoints (for INV broadcasting)
+	GetAllOutpoints(ctx context.Context) ([]message.Outpoint, error)
+
+	// ExpireMessages removes messages older than the given duration
+	ExpireMessages(maxAge time.Duration) int
 }

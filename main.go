@@ -26,6 +26,7 @@ import (
 	"github.com/shaibearary/utxo_chat/blockchain"
 	"github.com/shaibearary/utxo_chat/database"
 	"github.com/shaibearary/utxo_chat/network"
+	"github.com/shaibearary/utxo_chat/rpc"
 	"github.com/shaibearary/utxo_chat/utils"
 )
 
@@ -185,6 +186,17 @@ func utxoChatMain() error {
 		return err
 	}
 
+	// Start RPC server if enabled
+	var rpcServer *rpc.Server
+	if cfg.RPC.Enabled {
+		rpcServer = rpc.NewServer(networkManager, cfg.RPC.ListenAddr)
+		go func() {
+			if err := rpcServer.Start(); err != nil {
+				log.Printf("RPC server error: %v", err)
+			}
+		}()
+	}
+
 	// Start block notification handler for cleaning up spent outpoints.
 	blockHandler := blockchain.NewHandlerWithConfig(bitcoinClient, db, blockchain.Config{
 		NotificationsEnabled: cfg.Blockchain.NotificationsEnabled,
@@ -199,6 +211,9 @@ func utxoChatMain() error {
 
 	// Print startup information.
 	log.Printf("UTXOchat is running on %s", cfg.Network.ListenAddr)
+	if cfg.RPC.Enabled {
+		log.Printf("RPC server is running on %s", cfg.RPC.ListenAddr)
+	}
 	log.Printf("Data directory: %s", cfg.DataDir)
 
 	// Wait until the interrupt signal is received from an OS signal or
@@ -327,6 +342,10 @@ func loadConfig() (*config, error) {
 					TraceProfile:  *traceProfile,
 					LogLevel:      "info",
 				},
+				RPC: rpcConfig{
+					Enabled:    false,
+					ListenAddr: "127.0.0.1:8335",
+				},
 			}, nil
 		}
 		return nil, fmt.Errorf("error opening config file: %v", err)
@@ -390,6 +409,9 @@ func loadConfig() (*config, error) {
 	if cfg.Debug.LogLevel == "" {
 		cfg.Debug.LogLevel = "info"
 	}
+	if cfg.RPC.ListenAddr == "" {
+		cfg.RPC.ListenAddr = "127.0.0.1:8335"
+	}
 
 	return &cfg, nil
 }
@@ -402,6 +424,7 @@ type config struct {
 	Database   databaseConfig
 	Blockchain blockchainConfig
 	Message    messageConfig
+	RPC        rpcConfig
 	Debug      debugConfig
 }
 
@@ -438,6 +461,12 @@ type blockchainConfig struct {
 type messageConfig struct {
 	MaxPayloadSize int
 	MaxMessageSize int
+}
+
+// rpcConfig defines the RPC configuration for UTXOchat.
+type rpcConfig struct {
+	Enabled    bool
+	ListenAddr string
 }
 
 // debugConfig defines the debug configuration for UTXOchat.
