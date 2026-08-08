@@ -22,9 +22,10 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
-	"io"
 	"log"
+	"math"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
@@ -45,8 +46,6 @@ type Outpoint struct {
 const (
 	// MessageTypeData is sent to deliver messages (from network/peer.go)
 	messageTypeData byte = 0x03
-	// ServerAddress is the address the UTXO Chat node listens on
-	serverAddress = "localhost:8335"
 	// OutpointSize is the expected byte length of an outpoint (txid + vout index)
 	outpointSize = 36
 	// SignatureSize is the expected byte length of a signature
@@ -69,49 +68,108 @@ func GetTagSha256(data []byte) (hash []byte) {
 	return GetSha256(msg)
 }
 
+// parseTaprootDescriptor extracts the extended private key and the full
+// derivation path from a key-path-only tr(...) descriptor. A wildcard element
+// ("*" or "*h") is resolved to wildcardIndex, which is why the caller must
+// supply one: the descriptor alone does not name a single key.
+func parseTaprootDescriptor(descriptor string, wildcardIndex uint32) (string, []uint32, error) {
+	body := strings.TrimSpace(descriptor)
+	if !strings.HasPrefix(body, "tr(") {
+		return "", nil, fmt.Errorf("descriptor must be a tr(...) descriptor")
+	}
+	body = strings.TrimPrefix(body, "tr(")
+
+	// Drop the closing parenthesis and any trailing "#checksum".
+	end := strings.LastIndex(body, ")")
+	if end < 0 {
+		return "", nil, fmt.Errorf("descriptor is missing its closing parenthesis")
+	}
+	body = body[:end]
+
+	if strings.Contains(body, ",") {
+		return "", nil, fmt.Errorf("script-path descriptors are not supported; use a key-path-only tr(KEY) descriptor")
+	}
+
+	// Strip an optional key origin block such as "[fingerprint/86h/1h/0h]".
+	if strings.HasPrefix(body, "[") {
+		originEnd := strings.Index(body, "]")
+		if originEnd < 0 {
+			return "", nil, fmt.Errorf("descriptor has an unterminated key origin block")
+		}
+		body = body[originEnd+1:]
+	}
+
+	parts := strings.Split(body, "/")
+	if parts[0] == "" {
+		return "", nil, fmt.Errorf("descriptor is missing its extended key")
+	}
+
+	// Every element after the key is part of the path. Dropping the last one
+	// derives the parent of the intended key and produces a signature that
+	// cannot verify against the UTXO's script.
+	path := make([]uint32, 0, len(parts)-1)
+	for _, part := range parts[1:] {
+		index, err := parsePathElement(part, wildcardIndex)
+		if err != nil {
+			return "", nil, fmt.Errorf("invalid path element %q: %v", part, err)
+		}
+		path = append(path, index)
+	}
+
+	return parts[0], path, nil
+}
+
+// parsePathElement converts one BIP-32 path element into a child index.
+func parsePathElement(part string, wildcardIndex uint32) (uint32, error) {
+	hardened := strings.HasSuffix(part, "h") || strings.HasSuffix(part, "'")
+	digits := strings.TrimRight(part, "h'")
+
+	var index uint32
+	if digits == "*" {
+		index = wildcardIndex
+	} else {
+		value, err := strconv.ParseUint(digits, 10, 32)
+		if err != nil {
+			return 0, fmt.Errorf("not a number or wildcard")
+		}
+		index = uint32(value)
+	}
+
+	if index >= hdkeychain.HardenedKeyStart {
+		return 0, fmt.Errorf("index %d is out of range", index)
+	}
+	if hardened {
+		index += hdkeychain.HardenedKeyStart
+	}
+
+	return index, nil
+}
+
 // SignMessageWithTaproot signs a message using BIP322
-func SignMessageWithTaproot(descriptor string, outpoint Outpoint, message string) ([]byte, error) {
-	// Parse descriptor
-	desc := strings.TrimPrefix(descriptor, "tr(")
-	desc = strings.Split(desc, ")#")[0]
-	parts := strings.Split(desc, "/")
-
-	// Get base key
-
-	tprv := parts[0]
-	log.Printf("Descriptor parts: %v", parts)
-	log.Printf("Full descriptor: %s", desc)
+func SignMessageWithTaproot(descriptor string, wildcardIndex uint32, outpoint Outpoint, message string) ([]byte, error) {
+	tprv, path, err := parseTaprootDescriptor(descriptor, wildcardIndex)
+	if err != nil {
+		return nil, err
+	}
 
 	// Parse the extended private key
 	extKey, err := hdkeychain.NewKeyFromString(tprv)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse tprv: %v", err)
+		return nil, fmt.Errorf("failed to parse extended key: %v", err)
 	}
 
 	// Verify it's a private key
 	if !extKey.IsPrivate() {
-		return nil, fmt.Errorf("not a private key")
+		return nil, fmt.Errorf("descriptor does not contain a private key")
 	}
 
-	// Derive through path
+	// Derive through the complete path
 	key := extKey
-	log.Printf("Derivation path parts: %v", parts)
-	log.Printf("Number of path parts: %d", len(parts))
-	for _, part := range parts[1 : len(parts)-1] {
-		var index uint32
-		if strings.HasSuffix(part, "h") {
-			num := strings.TrimSuffix(part, "h")
-			fmt.Sscanf(num, "%d", &index)
-			index += hdkeychain.HardenedKeyStart
-		} else {
-			fmt.Sscanf(part, "%d", &index)
-		}
-
+	for _, index := range path {
 		key, err = key.Derive(index)
 		if err != nil {
-			return nil, fmt.Errorf("derivation error: %v", err)
+			return nil, fmt.Errorf("derivation error at index %d: %v", index, err)
 		}
-		log.Printf("Derived key at path %s: %s", part, key.String())
 	}
 
 	// Get the private key
@@ -125,7 +183,6 @@ func SignMessageWithTaproot(descriptor string, outpoint Outpoint, message string
 	if err != nil {
 		return nil, fmt.Errorf("derivation error: %v", err)
 	}
-	log.Printf("Derived public key: %x", pubKey.SerializeCompressed())
 
 	schnorrPubKey, err := schnorr.ParsePubKey(schnorr.SerializePubKey(pubKey))
 	if err != nil {
@@ -139,9 +196,12 @@ func SignMessageWithTaproot(descriptor string, outpoint Outpoint, message string
 
 		return nil, fmt.Errorf("Error creating Taproot script: %v\n", err)
 	}
-	// Create the taproot script
 
-	log.Printf("Generated pkScript: %x", taprootScript)
+	// The node verifies against the scriptPubKey of the referenced UTXO, so a
+	// mismatch here is the difference between a signature that verifies and one
+	// that silently does not.
+	log.Printf("Signing with Taproot scriptPubKey %x", taprootScript)
+
 	// Step 1: Create the "to_spend" transaction (virtual tx1)
 	toSpend := wire.NewMsgTx(0)
 	messageHash := GetTagSha256([]byte(message))
@@ -240,42 +300,45 @@ func SignMessageWithTaproot(descriptor string, outpoint Outpoint, message string
 	// Add payload
 	msg = append(msg, []byte(message)...)
 
-	// Log the different parts of the message structure
-	log.Printf("Message structure breakdown:")
-	log.Printf("  Outpoint (%d bytes): %x", len(outpoint.TxID)+4, msg[:outpointSize])
-	log.Printf("  Signature (%d bytes): %x", signatureSize, msg[outpointSize:outpointSize+signatureSize])
-	log.Printf("  Length field (%d bytes): %x (decimal: %d)", 2, msg[outpointSize+signatureSize:outpointSize+signatureSize+2], length)
-	log.Printf("  Payload (%d bytes): %s", len(message), message)
-	log.Printf("Total message size: %d bytes", len(msg))
-	log.Printf("Witness: %x", witness)
-	log.Printf("PkScript: %x", taprootScript)
-	log.Printf("Message: %s", message)
 	verifyResult := bip322.VerifySignature(witness, taprootScript, message)
-	log.Printf("Signature verification result: %v", verifyResult)
+	if !verifyResult {
+		return nil, fmt.Errorf("locally generated BIP-322 signature did not verify")
+	}
 	return msg, nil
 }
 
 func main() {
 	// Command line flags
-	descriptor := flag.String("descriptor", "tr(tprv8ZgxMBicQKsPd9tkUFdaFQ3HSViR6rSQD75YToUJusnMd64hw2rwecHJohLZswiYa3mXEErjfkk79fo8jRbVeYzuHtTRB214iZz3s9kJYxM/86h/1h/0h/0/0/)#svs6tee0", "Taproot descriptor")
-	txid := flag.String("txid", "f63e8bae313e2f88a086b6927a81fe25ec43da550db8d714575abd1c22422021", "Transaction ID")
-	vout := flag.Uint("vout", 1, "Output index")
-	message := flag.String("message", "Hello, UTXO Chat!", "Message to sign")
+	descriptor := flag.String("descriptor", "", "Taproot private descriptor (test keys only)")
+	index := flag.Uint("index", 0, "Address index substituted for a wildcard (*) in the descriptor path")
+	txid := flag.String("txid", "", "Transaction ID")
+	vout := flag.Uint("vout", 0, "Output index")
+	message := flag.String("message", "", "Message to sign")
+	server := flag.String("server", "127.0.0.1:8335", "UTXO Chat node TCP address")
 	flag.Parse()
+	if *index > math.MaxUint32 {
+		log.Fatal("-index is out of range")
+	}
+	if *descriptor == "" || *txid == "" || *message == "" {
+		log.Fatal("-descriptor, -txid, and -message are required; use a disposable testnet descriptor only")
+	}
 
 	var outpoint Outpoint
-	txidBytes, _ := hex.DecodeString(*txid)
+	txidBytes, err := hex.DecodeString(*txid)
+	if err != nil || len(txidBytes) != 32 {
+		log.Fatal("-txid must be exactly 64 hexadecimal characters")
+	}
 	copy(outpoint.TxID[:], txidBytes)
 	outpoint.Index = uint32(*vout)
 
 	// Sign message
-	msg, err := SignMessageWithTaproot(*descriptor, outpoint, *message)
+	msg, err := SignMessageWithTaproot(*descriptor, uint32(*index), outpoint, *message)
 	if err != nil {
 		log.Fatalf("Error signing message: %v", err)
 	}
 
 	// Connect to the UTXO Chat server
-	conn, err := net.Dial("tcp", serverAddress)
+	conn, err := net.Dial("tcp", *server)
 	if err != nil {
 		log.Fatalf("Failed to connect to server: %v", err)
 	}
@@ -293,28 +356,5 @@ func main() {
 	}
 
 	fmt.Printf("Successfully sent %d bytes.\n", len(fullMsg))
-	// Print the full message in hex for debugging
-	fmt.Println("Full message hex dump:")
-	fmt.Printf("%x\n", fullMsg)
-
-	// Print a more detailed breakdown of the message
-	fmt.Println("\nMessage breakdown:")
-	fmt.Printf("Message Type: %x\n", fullMsg[0])
-	fmt.Printf("Outpoint (txid+vout): %x\n", fullMsg[1:37])
-	fmt.Printf("Signature: %x\n", fullMsg[37:101])
-	fmt.Printf("Length field: %x (decimal: %d)\n", fullMsg[101:103], binary.LittleEndian.Uint16(fullMsg[101:103]))
-	fmt.Printf("Payload: %s\n", fullMsg[103:])
-
-	// Wait for server response
-
-	fmt.Println("Waiting for server response...")
-	response := make([]byte, 1024)
-	n, err := conn.Read(response)
-	if err != nil {
-		if err != io.EOF {
-			log.Printf("Error reading response: %v", err)
-		}
-	} else {
-		fmt.Printf("Received response (%d bytes): %s\n", n, response[:n])
-	}
+	fmt.Printf("Submitted message to %s for outpoint %s:%d. The current P2P protocol has no acknowledgement.\n", *server, *txid, *vout)
 }
