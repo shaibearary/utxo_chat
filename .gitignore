@@ -63,7 +63,5 @@ utxochat-cli
 scripts/testnet/
 scripts/regtest/
 
-cmd/client/examples
-
 LICENSE
 setup_regtest.sh
