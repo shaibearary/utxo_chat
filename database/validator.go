@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"log"
 
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -40,9 +41,10 @@ func (v *Validator) ValidateMessage(
 	if seen {
 		return fmt.Errorf("outpoint already seen")
 	}
-	// Log pubkey hex and outpoint for debugging
+	// Log the outpoint and script being validated. The script is binary, so it
+	// is hex-encoded; printing it raw corrupts the log stream.
 	hash, vout := msg.Outpoint.ToTxidIdx()
-	fmt.Printf("Validating message - Outpoint: %s:%d, PubKey: %s\n",
+	log.Printf("Validating message - Outpoint: %s:%d, pkScript: %x",
 		hash.String(), vout, pkScript)
 
 	// Verify UTXO ownership
@@ -89,12 +91,16 @@ func (v *Validator) VerifyUTXOOwnership(
 	return nil
 }
 
-// VerifySignature verifies that the message was signed by the owner of the public key.
+// VerifySignature verifies that the message was signed by the owner of the
+// script that locks the referenced UTXO.
 func (v *Validator) VerifySignature(message string, signature []byte, pkScript []byte) error {
-	// Convert pkScript to wire.TxWitness
+	// The witness for a Taproot key-path spend is the single 64-byte signature.
 	witness := wire.TxWitness{signature}
-	a := bip322.VerifySignature(witness, pkScript, message)
-	fmt.Printf("Signature verification result: %v\n", a)
+
+	if !bip322.VerifySignature(witness, pkScript, message) {
+		return fmt.Errorf(
+			"BIP-322 signature does not prove control of script %x", pkScript)
+	}
 
 	return nil
 }

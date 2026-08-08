@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
@@ -145,22 +146,25 @@ func parsePathElement(part string, wildcardIndex uint32) (uint32, error) {
 	return index, nil
 }
 
-// SignMessageWithTaproot signs a message using BIP322
-func SignMessageWithTaproot(descriptor string, wildcardIndex uint32, outpoint Outpoint, message string) ([]byte, error) {
+// deriveTaprootKey resolves a descriptor to the private key it names and the
+// Taproot scriptPubKey that key controls. The script is what the node checks
+// the signature against, so returning it lets callers compare it with the
+// script of the UTXO being referenced.
+func deriveTaprootKey(descriptor string, wildcardIndex uint32) (*btcec.PrivateKey, []byte, error) {
 	tprv, path, err := parseTaprootDescriptor(descriptor, wildcardIndex)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Parse the extended private key
 	extKey, err := hdkeychain.NewKeyFromString(tprv)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse extended key: %v", err)
+		return nil, nil, fmt.Errorf("failed to parse extended key: %v", err)
 	}
 
 	// Verify it's a private key
 	if !extKey.IsPrivate() {
-		return nil, fmt.Errorf("descriptor does not contain a private key")
+		return nil, nil, fmt.Errorf("descriptor does not contain a private key")
 	}
 
 	// Derive through the complete path
@@ -168,33 +172,40 @@ func SignMessageWithTaproot(descriptor string, wildcardIndex uint32, outpoint Ou
 	for _, index := range path {
 		key, err = key.Derive(index)
 		if err != nil {
-			return nil, fmt.Errorf("derivation error at index %d: %v", index, err)
+			return nil, nil, fmt.Errorf("derivation error at index %d: %v", index, err)
 		}
 	}
 
-	// Get the private key
 	privKey, err := key.ECPrivKey()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get private key: %v", err)
+		return nil, nil, fmt.Errorf("failed to get private key: %v", err)
 	}
 
-	// Get the public key
 	pubKey, err := key.ECPubKey()
 	if err != nil {
-		return nil, fmt.Errorf("derivation error: %v", err)
+		return nil, nil, fmt.Errorf("failed to get public key: %v", err)
 	}
 
 	schnorrPubKey, err := schnorr.ParsePubKey(schnorr.SerializePubKey(pubKey))
 	if err != nil {
-
-		return nil, fmt.Errorf("Error converting to Schnorr pubkey: %v\n", err)
+		return nil, nil, fmt.Errorf("failed to convert to a Schnorr pubkey: %v", err)
 	}
+
 	// Create Taproot output key
 	taprootKey := txscript.ComputeTaprootOutputKey(schnorrPubKey, nil)
 	taprootScript, err := txscript.PayToTaprootScript(taprootKey)
 	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create the Taproot script: %v", err)
+	}
 
-		return nil, fmt.Errorf("Error creating Taproot script: %v\n", err)
+	return privKey, taprootScript, nil
+}
+
+// SignMessageWithTaproot signs a message using BIP322
+func SignMessageWithTaproot(descriptor string, wildcardIndex uint32, outpoint Outpoint, message string) ([]byte, error) {
+	privKey, taprootScript, err := deriveTaprootKey(descriptor, wildcardIndex)
+	if err != nil {
+		return nil, err
 	}
 
 	// The node verifies against the scriptPubKey of the referenced UTXO, so a
