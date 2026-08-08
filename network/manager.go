@@ -108,12 +108,19 @@ func (m *Manager) Stop() error {
 		m.listener.Close()
 	}
 
-	// Disconnect all peers
+	// Snapshot the peer list, then disconnect outside the lock. Disconnect
+	// removes each peer from the map, so holding peersMu across the loop would
+	// deadlock the shutdown.
 	m.peersMu.Lock()
+	peers := make([]*Peer, 0, len(m.peers))
 	for _, peer := range m.peers {
-		peer.Disconnect()
+		peers = append(peers, peer)
 	}
 	m.peersMu.Unlock()
+
+	for _, peer := range peers {
+		peer.Disconnect()
+	}
 
 	// Wait for all goroutines to finish
 	m.wg.Wait()

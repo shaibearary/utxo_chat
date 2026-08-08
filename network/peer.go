@@ -349,13 +349,29 @@ func (p *Peer) SendMessage(msgType MessageType, data []byte) error {
 	return err
 }
 
-// Disconnect closes the connection to the peer
+// Disconnect closes the connection to the peer and removes it from the
+// manager's peer list.
+//
+// The manager's bookkeeping deliberately happens outside p.mutex. Every other
+// path takes the manager's peer lock and then a peer lock, so taking them in
+// the opposite order here would invert the lock ordering and deadlock.
 func (p *Peer) Disconnect() {
+	if !p.closeConn() {
+		// Someone else already disconnected this peer.
+		return
+	}
+
+	p.manager.removePeerFromList(p)
+}
+
+// closeConn tears down the connection and reports whether this call was the one
+// that closed it. It touches only per-peer state.
+func (p *Peer) closeConn() bool {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
 	if !p.connected {
-		return
+		return false
 	}
 
 	log.Printf("Disconnecting peer %s", p.addr)
@@ -367,9 +383,7 @@ func (p *Peer) Disconnect() {
 	// Signal disconnect
 	close(p.disconnect)
 
-	// Log closure *before* removing from list
 	log.Printf("Connection from %s closed", p.addr)
 
-	// Remove from manager's peer list
-	p.manager.removePeerFromList(p)
+	return true
 }

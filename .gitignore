@@ -14,7 +14,7 @@
 # Go workspace file
 go.work
 
-# Documentation
+# Local review notes; do not include them in commits yet.
 docs/
 
 # Dependency directories
@@ -49,12 +49,21 @@ tmp/
 config/config.json
 config.json
 
-# Project binaries
+# Project binaries and the default data directory. These are anchored to the
+# repository root so they cannot match the cmd/client source directory.
 utxochat-cli
+/utxochat
+/utxo_chat
+/client
+/.utxochat/
+
+# Local Bitcoin testnet harness: generated configs contain RPC credentials.
+.utxochat-testnet/
+.utxochat-regtest/
+scripts/testnet/
+scripts/regtest/
 
 cmd/client/examples
 
-scripts/setup_regtest.sh
-scripts/cleanup_regtest.sh
 LICENSE
 setup_regtest.sh
