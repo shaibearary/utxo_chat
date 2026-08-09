@@ -24,13 +24,19 @@ func NewServer(networkManager *network.Manager, listenAddr string) *Server {
 	}
 }
 
-// Start starts the RPC server
+// Start starts the RPC server.
+//
+// The routes go on a private mux rather than http.DefaultServeMux. The
+// profiling server in main.go also serves DefaultServeMux, and binds it to
+// every interface, so registering here would publish these endpoints far
+// beyond the configured listen address whenever profiling is enabled.
 func (s *Server) Start() error {
-	http.HandleFunc("/sendmessage", s.handleSendMessage)
-	http.HandleFunc("/getmessages", s.handleGetMessages)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/sendmessage", s.handleSendMessage)
+	mux.HandleFunc("/getmessages", s.handleGetMessages)
 
 	log.Printf("Starting RPC server on %s", s.listenAddr)
-	return http.ListenAndServe(s.listenAddr, nil)
+	return http.ListenAndServe(s.listenAddr, mux)
 }
 
 // SendMessageRequest represents a request to send a message

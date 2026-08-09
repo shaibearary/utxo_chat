@@ -29,37 +29,24 @@ func NewValidator(client *bitcoin.Client, db Database) *Validator {
 	}
 }
 
-// ValidateMessage validates a message including UTXO ownership and signature.
+// ValidateMessage reports whether a message proves control of the script that
+// locks the referenced UTXO.
+//
+// This is pure validation: it answers a question and writes nothing. Recording
+// the outpoint before the message body is stored used to leave an outpoint
+// marked as used with nothing behind it whenever the store failed, so the
+// caller now owns both the duplicate check and the write.
 func (v *Validator) ValidateMessage(
 	ctx context.Context, msg *message.Message, pkScript []byte) error {
 
-	seen, err := v.db.HasOutpoint(ctx, msg.Outpoint)
-	if err != nil {
-		return fmt.Errorf("database error: %v", err)
-	}
-
-	if seen {
-		return fmt.Errorf("outpoint already seen")
-	}
 	// Log the outpoint and script being validated. The script is binary, so it
 	// is hex-encoded; printing it raw corrupts the log stream.
 	hash, vout := msg.Outpoint.ToTxidIdx()
 	log.Printf("Validating message - Outpoint: %s:%d, pkScript: %x",
 		hash.String(), vout, pkScript)
 
-	// Verify UTXO ownership
-	// if err := v.VerifyUTXOOwnership(ctx, msg.Outpoint, pkScript); err != nil {
-	// 	return fmt.Errorf("UTXO verification failed: %v", err)
-	// }
-	messageStr := string(msg.Payload)
-
-	if err := v.VerifySignature(messageStr, msg.Signature[:], pkScript); err != nil {
+	if err := v.VerifySignature(string(msg.Payload), msg.Signature[:], pkScript); err != nil {
 		return fmt.Errorf("signature verification failed: %v", err)
-	}
-
-	// Add outpoint to the database
-	if err := v.db.AddOutpoint(ctx, msg.Outpoint); err != nil {
-		return fmt.Errorf("failed to add outpoint to database: %v", err)
 	}
 
 	return nil

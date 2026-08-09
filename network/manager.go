@@ -28,6 +28,18 @@ const (
 	MessageSourceLocal
 )
 
+// String names the source for logs and error messages.
+func (s MessageSource) String() string {
+	switch s {
+	case MessageSourcePeer:
+		return "peer"
+	case MessageSourceLocal:
+		return "local"
+	default:
+		return "unknown"
+	}
+}
+
 // Manager handles the network operations for UTXOchat.
 type Manager struct {
 	config    Config
@@ -385,83 +397,64 @@ func (m *Manager) removePeerFromList(peer *Peer) {
 	}
 }
 
-// ProcessMessage handles a message based on its source
+// ProcessMessage validates a message and, if it is sound, stores it and
+// announces it to peers.
+//
+// Every message gets the same checks whatever door it arrived through. A local
+// submission is not evidence of anything: the HTTP endpoint is unauthenticated,
+// so "local" only means the sender could open a socket to it. Deciding whether
+// to verify a signature based on the sender's own claim about where it came
+// from is not a security boundary.
+//
+// The source affects one thing only, and it is not a security decision: how a
+// duplicate is reported. A peer re-announcing something we already hold is
+// routine, while a local submission naming a used outpoint is a mistake the
+// caller needs to hear about.
 func (m *Manager) ProcessMessage(ctx context.Context, msgData []byte, source MessageSource) error {
+	switch source {
+	case MessageSourcePeer, MessageSourceLocal:
+	default:
+		return fmt.Errorf("unknown message source: %d", source)
+	}
+
 	// Deserialize the message
 	msg, err := message.Deserialize(msgData)
 	if err != nil {
 		return fmt.Errorf("failed to deserialize message: %v", err)
 	}
 
-	switch source {
-	case MessageSourcePeer:
-		return m.processPeerMessage(ctx, msg, msgData)
-	case MessageSourceLocal:
-		return m.processLocalMessage(ctx, msg, msgData)
-	default:
-		return fmt.Errorf("unknown message source: %d", source)
-	}
-}
+	log.Printf("Processing %s message for outpoint %s", source, msg.Outpoint.ToString())
 
-// processPeerMessage handles messages received from network peers (full validation)
-func (m *Manager) processPeerMessage(ctx context.Context, msg *message.Message, msgData []byte) error {
-	log.Printf("Processing peer message for outpoint %s", msg.Outpoint.ToString())
-
-	// Check if we've already seen this outpoint (rate limiting)
+	// One outpoint carries one message.
 	seen, err := m.db.HasOutpoint(ctx, msg.Outpoint)
 	if err != nil {
 		return fmt.Errorf("database error: %v", err)
 	}
 	if seen {
+		if source == MessageSourceLocal {
+			return fmt.Errorf("outpoint %s already used", msg.Outpoint.ToString())
+		}
 		log.Printf("Outpoint %s already seen, ignoring", msg.Outpoint.ToString())
-		return nil // Not an error, just ignore duplicate
+		return nil
 	}
 
-	// Extract public key script for validation
+	// Look up the UTXO. This also establishes that it exists, is unspent, and
+	// is a Taproot output.
 	pkScript, err := m.extractPKScript(msg.Outpoint)
 	if err != nil {
 		return fmt.Errorf("failed to extract public key script: %v", err)
 	}
 
-	// Full validation for peer messages
 	if err := m.validator.ValidateMessage(ctx, msg, pkScript); err != nil {
-		return fmt.Errorf("peer message validation failed: %v", err)
+		return fmt.Errorf("%s message validation failed: %v", source, err)
 	}
 
-	// Store the message
+	// Storing the message is what marks the outpoint as used, so a rejected
+	// message cannot burn someone else's outpoint.
 	if err := m.db.AddMessage(ctx, msg.Outpoint, msgData); err != nil {
-		return fmt.Errorf("failed to store peer message: %v", err)
+		return fmt.Errorf("failed to store message: %v", err)
 	}
 
-	// Broadcast to other peers (but not back to sender)
-	return m.broadcastToAllPeers(msg.Outpoint)
-}
-
-// processLocalMessage handles messages from local wallet/RPC (minimal validation)
-func (m *Manager) processLocalMessage(ctx context.Context, msg *message.Message, msgData []byte) error {
-	log.Printf("Processing local wallet message for outpoint %s", msg.Outpoint.ToString())
-
-	// For local messages, we trust they're already validated by the wallet
-	// Just check for duplicates
-	seen, err := m.db.HasOutpoint(ctx, msg.Outpoint)
-	if err != nil {
-		return fmt.Errorf("database error: %v", err)
-	}
-	if seen {
-		return fmt.Errorf("outpoint %s already used", msg.Outpoint.ToString())
-	}
-
-	// Store the message without full validation
-	if err := m.db.AddMessage(ctx, msg.Outpoint, msgData); err != nil {
-		return fmt.Errorf("failed to store local message: %v", err)
-	}
-
-	// Mark outpoint as used
-	if err := m.db.AddOutpoint(ctx, msg.Outpoint); err != nil {
-		return fmt.Errorf("failed to mark outpoint as used: %v", err)
-	}
-
-	// Broadcast to all peers
 	return m.broadcastToAllPeers(msg.Outpoint)
 }
 
