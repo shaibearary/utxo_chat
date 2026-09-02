@@ -43,7 +43,6 @@ func NewClient(cfg Config) (*Client, error) {
 		HTTPPostMode: true,
 		DisableTLS:   true,
 	}
-	fmt.Println("connCfg", connCfg)
 	client, err := rpcclient.New(connCfg, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Bitcoin client: %v", err)
