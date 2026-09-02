@@ -62,6 +62,8 @@ utxochat-cli
 .utxochat-regtest/
 scripts/testnet/
 scripts/regtest/
+scripts/signet/
+.utxochat-signet/
 
 cmd/client/examples
 
