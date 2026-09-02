@@ -65,7 +65,5 @@ scripts/regtest/
 scripts/signet/
 .utxochat-signet/
 
-cmd/client/examples
-
 LICENSE
 setup_regtest.sh
