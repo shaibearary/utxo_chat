@@ -159,6 +159,12 @@ func (p *Peer) handleInvMessage(reader *bufio.Reader) error {
 		var outpoint message.Outpoint
 		copy(outpoint[:], outpointBytes[:])
 
+		// Record the announcement before the have-it check, not after. A peer
+		// advertising something this node already stores is exactly the case
+		// the console needs to show; skipping it would credit only whichever
+		// peer happened to deliver the body first.
+		p.manager.noteAnnouncement(outpoint, p.addr)
+
 		// Check in the database if we've already seen this outpoint
 		hasOutpoint, err := p.manager.db.HasOutpoint(p.ctx, outpoint)
 		if err != nil {
@@ -252,7 +258,7 @@ func (p *Peer) handleDataMessage(reader *bufio.Reader) error {
 	log.Printf("Received complete message from peer %s (%d bytes)", p.addr, len(msgData))
 
 	// Process the message as coming from a peer (full validation)
-	return p.manager.ProcessMessage(p.ctx, msgData, MessageSourcePeer)
+	return p.manager.ProcessMessage(p.ctx, msgData, MessageSourcePeer, p.addr)
 }
 
 // Helper function to extract public key from payload

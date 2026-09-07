@@ -26,6 +26,9 @@ const (
 	MessageSourcePeer MessageSource = iota
 	// MessageSourceLocal indicates the message came from local wallet/RPC
 	MessageSourceLocal
+	// MessageSourceWallet indicates the message was submitted locally but
+	// signed by an external wallet, so its signature must still be verified.
+	MessageSourceWallet
 )
 
 // Manager handles the network operations for UTXOchat.
@@ -36,6 +39,9 @@ type Manager struct {
 
 	peers   map[string]*Peer
 	peersMu sync.RWMutex
+
+	// origins records where each message came from, for the operator console.
+	origins *originTracker
 
 	listener net.Listener
 	quit     chan struct{}
@@ -51,6 +57,7 @@ func NewManager(cfg Config, v *database.Validator, db database.Database) (*Manag
 		validator: v,
 		db:        db,
 		peers:     make(map[string]*Peer),
+		origins:   newOriginTracker(),
 		quit:      make(chan struct{}),
 	}, nil
 }
@@ -385,22 +392,54 @@ func (m *Manager) removePeerFromList(peer *Peer) {
 	}
 }
 
-// ProcessMessage handles a message based on its source
-func (m *Manager) ProcessMessage(ctx context.Context, msgData []byte, source MessageSource) error {
+// ProcessMessage handles a message based on its source. from is the address of
+// the peer that delivered it, and is empty for locally submitted messages.
+func (m *Manager) ProcessMessage(ctx context.Context, msgData []byte, source MessageSource, from string) error {
 	// Deserialize the message
 	msg, err := message.Deserialize(msgData)
 	if err != nil {
 		return fmt.Errorf("failed to deserialize message: %v", err)
 	}
 
+	var procErr error
 	switch source {
 	case MessageSourcePeer:
-		return m.processPeerMessage(ctx, msg, msgData)
+		procErr = m.processPeerMessage(ctx, msg, msgData)
 	case MessageSourceLocal:
-		return m.processLocalMessage(ctx, msg, msgData)
+		procErr = m.processLocalMessage(ctx, msg, msgData)
+	case MessageSourceWallet:
+		procErr = m.processWalletMessage(ctx, msg, msgData)
 	default:
 		return fmt.Errorf("unknown message source: %d", source)
 	}
+	if procErr != nil {
+		return procErr
+	}
+
+	// Only a message that survived validation is worth attributing. Recording
+	// a rejected one would let any peer write whatever it liked into the
+	// console by sending garbage.
+	m.origins.recordDelivery(msg.Outpoint, source, from)
+
+	return nil
+}
+
+// MessageOrigin reports how this node came to hold a message. The second
+// result is false for a message this process never saw arrive, which is the
+// normal case for anything reloaded from disk after a restart.
+func (m *Manager) MessageOrigin(outpoint message.Outpoint) (Origin, bool) {
+	return m.origins.lookup(outpoint)
+}
+
+// ListenAddr reports the address this node accepts peer connections on, so a
+// client can tell which node in a cluster it is talking to.
+func (m *Manager) ListenAddr() string {
+	return m.config.ListenAddr
+}
+
+// noteAnnouncement records that a peer advertised an outpoint.
+func (m *Manager) noteAnnouncement(outpoint message.Outpoint, peer string) {
+	m.origins.recordAnnounce(outpoint, peer)
 }
 
 // processPeerMessage handles messages received from network peers (full validation)
@@ -465,6 +504,46 @@ func (m *Manager) processLocalMessage(ctx context.Context, msg *message.Message,
 	return m.broadcastToAllPeers(msg.Outpoint)
 }
 
+// processWalletMessage handles a message submitted over local RPC but signed
+// by an external wallet.
+//
+// The local path skips verification because the node produced the signature
+// itself and can vouch for it. A wallet-signed message carries a signature the
+// node has never seen, so it gets the same check a peer message does. Trusting
+// it instead would let anyone who can reach the RPC port publish under an
+// outpoint they do not own: the node would burn that outpoint locally, so the
+// real owner could never post from it, and then broadcast a message that every
+// peer rejects on validation.
+func (m *Manager) processWalletMessage(ctx context.Context, msg *message.Message, msgData []byte) error {
+	log.Printf("Processing wallet-signed message for outpoint %s", msg.Outpoint.ToString())
+
+	seen, err := m.db.HasOutpoint(ctx, msg.Outpoint)
+	if err != nil {
+		return fmt.Errorf("database error: %v", err)
+	}
+	if seen {
+		return fmt.Errorf("outpoint %s already used", msg.Outpoint.ToString())
+	}
+
+	pkScript, err := m.extractPKScript(msg.Outpoint)
+	if err != nil {
+		return fmt.Errorf("failed to extract public key script: %v", err)
+	}
+
+	if err := m.validator.ValidateMessage(ctx, msg, pkScript); err != nil {
+		return fmt.Errorf("wallet message validation failed: %v", err)
+	}
+
+	if err := m.db.AddMessage(ctx, msg.Outpoint, msgData); err != nil {
+		return fmt.Errorf("failed to store wallet message: %v", err)
+	}
+	if err := m.db.AddOutpoint(ctx, msg.Outpoint); err != nil {
+		return fmt.Errorf("failed to mark outpoint as used: %v", err)
+	}
+
+	return m.broadcastToAllPeers(msg.Outpoint)
+}
+
 // extractPKScript extracts the public key script for UTXO validation
 func (m *Manager) extractPKScript(outpoint message.Outpoint) ([]byte, error) {
 	hash, vout := outpoint.ToTxidIdx()
@@ -491,4 +570,11 @@ func (m *Manager) extractPKScript(outpoint message.Outpoint) ([]byte, error) {
 // GetAllOutpoints returns all known outpoints from the database
 func (m *Manager) GetAllOutpoints(ctx context.Context) ([]message.Outpoint, error) {
 	return m.db.GetAllOutpoints(ctx)
+}
+
+// GetMessage returns the stored message bytes for an outpoint. The RPC layer
+// needs this to serve message contents; the unexported getMessageFromDB is
+// reserved for the peer-serving path.
+func (m *Manager) GetMessage(ctx context.Context, outpoint message.Outpoint) ([]byte, error) {
+	return m.db.GetMessage(ctx, outpoint)
 }

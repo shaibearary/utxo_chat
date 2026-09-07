@@ -94,15 +94,29 @@ func (v *Validator) VerifyUTXOOwnership(
 // VerifySignature verifies that the message was signed by the owner of the
 // script that locks the referenced UTXO.
 func (v *Validator) VerifySignature(message string, signature []byte, pkScript []byte) error {
-	// The witness for a Taproot key-path spend is the single 64-byte signature.
-	witness := wire.TxWitness{signature}
-
-	if !bip322.VerifySignature(witness, pkScript, message) {
-		return fmt.Errorf(
-			"BIP-322 signature does not prove control of script %x", pkScript)
+	// The witness for a Taproot key-path spend is a single item: the 64-byte
+	// signature, optionally followed by an explicit sighash flag.
+	//
+	// Both forms have to be tried. BIP-341 commits the sighash type to the
+	// digest, so a signature made with SIGHASH_ALL does not verify as
+	// SIGHASH_DEFAULT and vice versa — they are different digests over the
+	// same message. The wire format carries only 64 bytes and cannot record
+	// which was used, so the flag is recovered here by attempting each.
+	// Sparrow emits SIGHASH_ALL; the node's own signer emits SIGHASH_DEFAULT.
+	// Trying only one silently rejects every message from the other.
+	candidates := [][]byte{
+		signature, // SIGHASH_DEFAULT
+		append(append([]byte{}, signature...), 0x01), // SIGHASH_ALL
 	}
 
-	return nil
+	for _, candidate := range candidates {
+		if bip322.VerifySignature(wire.TxWitness{candidate}, pkScript, message) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf(
+		"BIP-322 signature does not prove control of script %x", pkScript)
 }
 
 // GetTxOut retrieves a transaction output from the Bitcoin node.

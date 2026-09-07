@@ -2,16 +2,12 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"strings"
 
 	"github.com/shaibearary/utxo_chat/message"
 )
@@ -66,17 +62,21 @@ func main() {
 			fmt.Println("Error: -message flag is required for sendmessage command")
 			os.Exit(1)
 		}
+		// Go does not fall through, so this call has to live here. While it
+		// sat in the send-signed case, sendmessage validated its input and
+		// then exited without submitting anything, and send-signed followed a
+		// successful submission with a second, empty one.
+		if err := sendMessage(*rpcURL, *messageHex); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+
 	case "send-signed":
 		if *txid == "" || *signature == "" {
 			fmt.Println("Error: -txid and -signature are required for send-signed")
 			os.Exit(1)
 		}
 		if err := sendSignedMessage(*rpcURL, *txid, uint32(*vout), *signature, *payload); err != nil {
-			fmt.Printf("Error: %v\n", err)
-			os.Exit(1)
-		}
-		err := sendMessage(*rpcURL, *messageHex)
-		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -96,39 +96,68 @@ func main() {
 
 // sendSignedMessage assembles Sparrow's signature with the public outpoint and
 // exact payload, then submits the serialized DATA body to the local node. No
-// private key or wallet descriptor is accepted or required.
+// private key or wallet descriptor is accepted or required. The assembly is
+// shared with the node's /submitsigned endpoint so both paths produce
+// byte-identical messages.
 func sendSignedMessage(rpcURL, txid string, vout uint32, signatureText, payload string) error {
-	txid = strings.TrimPrefix(strings.TrimSpace(txid), "0x")
-	txidBytes, err := hex.DecodeString(txid)
-	if err != nil || len(txidBytes) != 32 {
-		return fmt.Errorf("txid must be exactly 64 hexadecimal characters")
-	}
-	sig, err := decodeSignature(signatureText)
-	if err != nil {
+	// Validate the inputs locally so an obvious typo is reported here rather
+	// than as an opaque rejection from the node.
+	if _, err := message.BuildSigned(txid, vout, signatureText, []byte(payload)); err != nil {
 		return err
 	}
-	if len([]byte(payload)) > message.MaxPayloadSize {
-		return message.ErrMessageTooLarge
+
+	req := SubmitSignedRequest{
+		TxID:      txid,
+		Vout:      vout,
+		Signature: signatureText,
+		Payload:   payload,
 	}
-	body := make([]byte, message.HeaderSize+len([]byte(payload)))
-	copy(body[0:32], txidBytes)
-	binary.LittleEndian.PutUint32(body[32:36], vout)
-	copy(body[36:100], sig)
-	binary.LittleEndian.PutUint16(body[100:102], uint16(len([]byte(payload))))
-	copy(body[102:], []byte(payload))
-	return sendMessage(rpcURL, hex.EncodeToString(body))
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %v", err)
+	}
+
+	// /submitsigned rather than /sendmessage: the node verifies the signature
+	// against the UTXO there. /sendmessage stores whatever it is given, so a
+	// mistyped signature would be accepted locally and then rejected by every
+	// peer, with the outpoint already spent as far as this node is concerned.
+	resp, err := http.Post(rpcURL+"/submitsigned", "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to send request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %v", err)
+	}
+
+	var response SubmitSignedResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return fmt.Errorf("failed to parse response: %v", err)
+	}
+	if !response.Success {
+		return fmt.Errorf("node rejected message: %s", response.Error)
+	}
+
+	fmt.Printf("Message sent successfully!\n")
+	fmt.Printf("Outpoint: %s\n", response.Outpoint)
+	return nil
 }
 
-func decodeSignature(text string) ([]byte, error) {
-	text = strings.TrimSpace(text)
-	text = strings.TrimPrefix(text, "0x")
-	if sig, err := hex.DecodeString(text); err == nil && len(sig) == message.SignatureSize {
-		return sig, nil
-	}
-	if sig, err := base64.StdEncoding.DecodeString(text); err == nil && len(sig) == message.SignatureSize {
-		return sig, nil
-	}
-	return nil, fmt.Errorf("signature must decode to exactly 64 bytes of hex or base64")
+// SubmitSignedRequest mirrors the node's /submitsigned payload.
+type SubmitSignedRequest struct {
+	TxID      string `json:"txid"`
+	Vout      uint32 `json:"vout"`
+	Signature string `json:"signature"`
+	Payload   string `json:"payload"`
+}
+
+// SubmitSignedResponse is the node's reply to a /submitsigned request.
+type SubmitSignedResponse struct {
+	Success  bool   `json:"success"`
+	Error    string `json:"error,omitempty"`
+	Outpoint string `json:"outpoint,omitempty"`
 }
 
 func sendMessage(rpcURL, messageHex string) error {

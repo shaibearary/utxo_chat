@@ -2,8 +2,11 @@ package message
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 )
@@ -51,8 +54,38 @@ func (op Outpoint) ToTxidIdx() (*chainhash.Hash, uint32) {
 	return hash, binary.LittleEndian.Uint32(op[32:36])
 }
 
+// ToString renders the outpoint as "txid:vout". The index is stored
+// little-endian by Serialize, so it must be read that way here: reading it
+// big-endian reported the wrong vout for every output except index 0, and the
+// resulting string could not be parsed back into the outpoint it came from.
 func (op Outpoint) ToString() string {
-	return fmt.Sprintf("%x:%d", op[:32], binary.BigEndian.Uint32(op[32:36]))
+	return fmt.Sprintf("%x:%d", op[:32], binary.LittleEndian.Uint32(op[32:36]))
+}
+
+// ParseOutpoint is the inverse of ToString. It lets callers that only have the
+// textual form, such as HTTP clients, address a stored message.
+func ParseOutpoint(s string) (Outpoint, error) {
+	var op Outpoint
+
+	sep := strings.LastIndex(s, ":")
+	if sep < 0 {
+		return op, fmt.Errorf("outpoint must be formatted as txid:vout")
+	}
+
+	txid, err := hex.DecodeString(s[:sep])
+	if err != nil || len(txid) != 32 {
+		return op, fmt.Errorf("txid must be exactly 64 hexadecimal characters")
+	}
+
+	index, err := strconv.ParseUint(s[sep+1:], 10, 32)
+	if err != nil {
+		return op, fmt.Errorf("vout must be an unsigned 32-bit integer")
+	}
+
+	copy(op[:32], txid)
+	binary.LittleEndian.PutUint32(op[32:36], uint32(index))
+
+	return op, nil
 }
 
 // Message represents a UTXOchat message
