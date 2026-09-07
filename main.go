@@ -189,9 +189,19 @@ func utxoChatMain() error {
 	// Start RPC server if enabled
 	var rpcServer *rpc.Server
 	if cfg.RPC.Enabled {
-		rpcServer = rpc.NewServer(networkManager, cfg.RPC.ListenAddr)
+		// info.Chain gates the RPC signing endpoint, which must stay off
+		// anywhere the keys are not disposable.
+		rpcServer = rpc.NewServer(networkManager, cfg.RPC.ListenAddr, info.Chain)
+
+		// Bind here rather than inside the goroutine. A node with no API is
+		// not usable and should say so at startup instead of running on in a
+		// state its own log describes as healthy.
+		listener, err := rpcServer.Listen()
+		if err != nil {
+			return err
+		}
 		go func() {
-			if err := rpcServer.Start(); err != nil {
+			if err := rpcServer.Serve(listener); err != nil {
 				log.Printf("RPC server error: %v", err)
 			}
 		}()
